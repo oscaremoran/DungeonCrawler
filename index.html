@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wanderer — Greenwood</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1a1410; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font-family: "Trebuchet MS", system-ui, sans-serif; }
+  #game { image-rendering: pixelated; background: #2d5a27; box-shadow: 0 0 40px rgba(0,0,0,.6); }
+  #hud { position: fixed; top: 14px; left: 16px; color: #f0e6d2; text-shadow: 1px 1px 2px #000;
+         font-size: 14px; line-height: 1.5; pointer-events: none; opacity: .9; }
+  #hud b { color: #ffd479; }
+  #loader { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: #f0e6d2; font-size: 20px; background: #1a1410; }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div><b>Greenwood Forest</b></div>
+    <div>Move: <b>WASD</b> / Arrows &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>ESC</b> menu</div>
+  </div>
+  <div id="loader">Loading the forest…</div>
+  <script src="game.js"></script>
+</body>
+</html>
