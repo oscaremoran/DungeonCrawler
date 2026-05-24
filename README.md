@@ -11,10 +11,13 @@ directly via `file://` will fail to load assets in most browsers):
 
 ```bash
 cd "/Users/seanmoran/Desktop/DungeonCrawler"
-python3 -m http.server 8765
+python3 serve.py 8765
 ```
 
-Then open <http://localhost:8765/> in a browser.
+Then open <http://localhost:8765/> in a browser. `serve.py` is a thin
+`http.server` wrapper that sends no-cache headers, so Safari (which otherwise
+caches `game.js` aggressively) always refetches your latest edits. Plain
+`python3 -m http.server 8765` also works if you don't mind hard-reloading.
 
 ## Controls
 

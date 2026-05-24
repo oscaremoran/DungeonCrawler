@@ -47,6 +47,16 @@ const SKILLS = [
 const SKILL_BY_ID = Object.fromEntries(SKILLS.map(s => [s.id, s]));
 const skillSlots = lv => Math.floor(lv / 2);
 
+/* equippable gear — one item per slot may be worn; bonuses add to base stats */
+const EQUIP = [
+  { id: "wood_sword",   name: "Wood Sword",   slot: "weapon", atk: 3, def: 0, desc: "A sturdy practice blade. +3 Attack." },
+  { id: "cloak",        name: "Cloak",        slot: "armor",  atk: 0, def: 2, desc: "A traveler's cloak. +2 Defense." },
+  { id: "leather_tunic", name: "Leather Tunic", slot: "armor", atk: 0, def: 5, desc: "Boiled-leather armor. +5 Defense." },
+];
+const EQUIP_BY_ID = Object.fromEntries(EQUIP.map(e => [e.id, e]));
+const EQUIP_SLOTS = ["weapon", "armor"];
+const EQUIP_SLOTLABEL = { weapon: "Weapon", armor: "Armor" };
+
 /* the game's title — change this string to rename the game */
 const GAME_TITLE = "Game";
 const GAME_SUBTITLE = "";
@@ -107,9 +117,10 @@ function buildWorld(seed) {
   }
 
   /* a winding dirt trail entering from the south edge up to the clearing */
-  let trailX = (MAP_W / 2) | 0;
+  let trailX = (MAP_W / 2) | 0, trailTopX = trailX;
   for (let y = MAP_H - 1; y >= 6; y--) {
     for (let w = -1; w <= 1; w++) if (inB(trailX + w, y)) ground[y][trailX + w] = G_DIRT;
+    if (y === 6) trailTopX = trailX;          // remember the path's northern end
     if (rng() < 0.45) trailX += rng() < 0.5 ? -1 : 1;
     trailX = Math.max(6, Math.min(MAP_W - 7, trailX));
   }
@@ -158,7 +169,13 @@ function buildWorld(seed) {
     { id: 3, tx: midX + 9, ty: 19 },
     { id: 4, tx: MAP_W - 4, ty: gateY, guardian: true },   // blocks the gate
   ];
-  return { ground, blocked, objects, spawn, lizards, gateY };
+  /* a treasure chest sitting at the north end of the central dirt trail */
+  const chest = { tx: trailTopX, ty: 6, opened: false, item: "leather_tunic" };
+  for (let i = objects.length - 1; i >= 0; i--)            // clear anything on its tile
+    if (objects[i].tx === chest.tx && objects[i].ty === chest.ty) objects.splice(i, 1);
+  if (inB(chest.tx, chest.ty)) blocked[chest.ty][chest.tx] = true;  // solid: bump to open
+
+  return { ground, blocked, objects, spawn, lizards, gateY, chest };
 }
 
 /* --------------------------------- game ---------------------------------- */
@@ -181,6 +198,8 @@ class Game {
       hp: 30, maxhp: 30, mp: 8, maxmp: 8,
       atk: 9, def: 5, gold: 150,
       skills: [],          // equipped skill ids (slots = floor(LV/2))
+      equipOwned: ["wood_sword", "cloak"],          // gear in the pack
+      equip: { weapon: "wood_sword", armor: "cloak" },  // gear currently worn
     };
     this.items = [
       { name: "Potion", qty: 3, desc: "Restores 25 HP to one ally." },
@@ -273,7 +292,7 @@ class Game {
       if (this.ui) { this.menuKey(key); return; }  // navigate the menu
       if (key === "escape" || key === "m") this.ui = { screen: "main", sel: 0 };
       else if (key === "i") this.ui = { screen: "items", sel: 0 };
-      else if (key === "enter" || key === " ") this.startIntro();   // re-show intro line
+      else if (key === "enter" || key === " ") { if (!this.tryOpenChest()) this.startIntro(); }
     }
   }
 
@@ -292,6 +311,7 @@ class Game {
         if (pick === "Items") this.ui = { screen: "items", sel: 0 };
         else if (pick === "Status") this.ui = { screen: "status", sel: 0 };
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1 };
+        else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null };
         else if (pick === "Save") { this.saveGame(); this.ui = null; }
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
@@ -303,6 +323,22 @@ class Game {
       }
       if (key === "enter" || key === " ") this.flash = { text: "Can't use that here.", t: 1200 };
     }
+  }
+
+  /* open the trail-end chest if the hero is standing beside it */
+  tryOpenChest() {
+    const chest = this.world.chest; if (!chest || chest.opened) return false;
+    const p = this.player;
+    const cx = chest.tx * TILE + TILE / 2, cy = (chest.ty + 0.5) * TILE;
+    if (Math.hypot(p.x - cx, p.y - cy) > TILE * 1.7) return false;
+    chest.opened = true;
+    const it = EQUIP_BY_ID[chest.item];
+    if (!p.equipOwned.includes(chest.item)) p.equipOwned.push(chest.item);
+    this.dialogue = { name: p.name, page: 0, lines: [
+      ["A " + it.name + "!", it.desc],
+      ["Equip it from the menu", "(press M, then Equip)."],
+    ]};
+    return true;
   }
 
   startIntro() {
@@ -331,6 +367,8 @@ class Game {
       v: 1, name: p.name, lv: p.lv, exp: p.exp, expNext: p.expNext,
       hp: p.hp, maxhp: p.maxhp, mp: p.mp, maxmp: p.maxmp, atk: p.atk, def: p.def,
       gold: p.gold, skills: p.skills.slice(),
+      equipOwned: p.equipOwned.slice(), equip: { ...p.equip },
+      chestOpened: !!(this.world.chest && this.world.chest.opened),
       items: this.items.map(i => ({ name: i.name, qty: i.qty })),
       dead: this.lizards.map(l => !l.alive),
       px: p.x, py: p.y, at: Date.now(),
@@ -348,6 +386,9 @@ class Game {
       atk: data.atk, def: data.def, gold: data.gold, skills: (data.skills || []).slice(),
       x: data.px, y: data.py,
     });
+    if (data.equipOwned) p.equipOwned = data.equipOwned.slice();
+    if (data.equip) p.equip = { weapon: data.equip.weapon || null, armor: data.equip.armor || null };
+    if (this.world.chest) this.world.chest.opened = !!data.chestOpened;
     for (const it of this.items) { const s = (data.items || []).find(i => i.name === it.name); it.qty = s ? s.qty : it.qty; }
     this.lizards.forEach((l, i) => { l.alive = !(data.dead && data.dead[i]); });
     this.introShown = true;
@@ -469,6 +510,28 @@ class Game {
     }
   }
 
+  /* a small pixel treasure chest, anchored bottom-center at (worldX, baseY) */
+  drawChest(worldX, baseY, opened) {
+    const ctx = this.ctx, cam = this.cam;
+    const w = TILE * 0.78, h = TILE * 0.66;
+    const x = worldX - w / 2 - cam.x, y = baseY - h - cam.y;
+    ctx.save();
+    ctx.fillStyle = "#7a4a1e"; ctx.fillRect(x, y + h * 0.34, w, h * 0.66);          // body
+    ctx.fillStyle = "#5c3514"; ctx.fillRect(x, y + h * 0.34, w, h * 0.08);          // shadow lip
+    if (opened) {
+      ctx.fillStyle = "#2a1a0c"; ctx.fillRect(x + w * 0.08, y + h * 0.2, w * 0.84, h * 0.2);  // open interior
+      ctx.fillStyle = "#8a5a26"; ctx.fillRect(x - w * 0.02, y - h * 0.04, w * 1.04, h * 0.16); // raised lid
+    } else {
+      ctx.fillStyle = "#8a5a26"; ctx.fillRect(x, y + h * 0.08, w, h * 0.3);         // closed lid
+      ctx.fillStyle = "#d9a441"; ctx.fillRect(x + w * 0.43, y + h * 0.2, w * 0.14, h * 0.2); // lock
+    }
+    ctx.fillStyle = "#d9a441";                                                      // metal bands
+    ctx.fillRect(x + w * 0.1, y + h * 0.34, w * 0.06, h * 0.66);
+    ctx.fillRect(x + w * 0.84, y + h * 0.34, w * 0.06, h * 0.66);
+    ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    ctx.restore();
+  }
+
   /* draw one decoration / the player, anchored at the tile's base */
   drawSprite(img, worldX, baseY, wTiles, flip) {
     const w = wTiles * TILE;
@@ -489,7 +552,7 @@ class Game {
   render() {
     if (this.state === "title") this.renderTitle();
     else if (this.state === "name") this.renderName();
-    else if (this.state === "battle") this.renderBattle();
+    else if (this.state === "battle" && this.battle) this.renderBattle();
     else if (this.encounter && this.encounter.phase === "whirl") this.renderWhirl();
     else this.renderOverworld();
 
@@ -699,6 +762,14 @@ class Game {
         this.drawSprite(art[o.kind], worldX, baseY, k.widthTiles, false);
       }});
     }
+    const chest = this.world.chest;
+    if (chest) {
+      const cwx = chest.tx * TILE + TILE / 2, cby = (chest.ty + 1) * TILE;
+      renderables.push({ sortY: (chest.ty + 0.9) * TILE, draw: () => {
+        shadow(cwx, cby, 0.85);
+        this.drawChest(cwx, cby, chest.opened);
+      }});
+    }
     for (const lz of this.lizards) {
       if (!lz.alive) continue;
       const grp = lz.anim === "roar" ? "liz_roar" : lz.guardian ? "liz_idle" : "liz_sleep";
@@ -778,6 +849,7 @@ class Game {
     else if (ui.screen === "status") this.drawStatusScreen();
     else if (ui.screen === "items") this.drawItemsScreen();
     else if (ui.screen === "skills") this.drawSkillsScreen();
+    else if (ui.screen === "equip") this.drawEquipScreen();
   }
 
   /* ----------------------------- skills screen --------------------------- */
@@ -793,7 +865,9 @@ class Game {
     return { x, y, w, h, rows, slots, n, slotX, slotY };
   }
   onMouse(type, mx, my) {
-    if (!this.ui || this.ui.screen !== "skills") return;
+    if (!this.ui) return;
+    if (this.ui.screen === "equip") return this.onEquipMouse(type, mx, my);
+    if (this.ui.screen !== "skills") return;
     const ui = this.ui, p = this.player, L = this.skillLayout();
     const hit = r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
     while (p.skills.length < L.n) p.skills.push(null);
@@ -858,6 +932,101 @@ class Game {
     this.text("ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   }
 
+  /* ----------------------------- equip screen --------------------------- */
+  equipLayout() {
+    const W = this.cv.width, H = this.cv.height;
+    const x = 40, y = 36, w = W - 80, h = H - 110;
+    const listX = x + 36, listY = y + 110, rowH = 64;
+    const rows = this.player.equipOwned.map((id, i) =>
+      ({ id, item: EQUIP_BY_ID[id], x: listX, y: listY + i * rowH, w: 380, h: 54 }));
+    const ss = 84, gap = 30, slotX = x + w - 300, slotY = y + 126;
+    const slots = EQUIP_SLOTS.map((slot, i) => ({ slot, x: slotX, y: slotY + i * (ss + gap), w: ss, h: ss }));
+    return { x, y, w, h, rows, slots, listX, listY, slotX, slotY };
+  }
+  onEquipMouse(type, mx, my) {
+    const ui = this.ui, p = this.player, L = this.equipLayout();
+    const hit = r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
+    if (type === "down") {
+      for (const r of L.rows) if (hit(r)) { ui.drag = { id: r.id, from: "list", mx, my }; return; }
+      for (const s of L.slots) { const id = p.equip[s.slot]; if (id && hit(s)) { ui.drag = { id, from: "slot", slot: s.slot, mx, my }; return; } }
+    } else if (type === "move" && ui.drag) {
+      ui.drag.mx = mx; ui.drag.my = my; ui.hover = null;
+      for (const s of L.slots) if (hit(s)) ui.hover = s.slot;
+    } else if (type === "up" && ui.drag) {
+      let drop = null; for (const s of L.slots) if (hit(s)) drop = s.slot;
+      const item = EQUIP_BY_ID[ui.drag.id];
+      if (drop && item.slot === drop) p.equip[drop] = ui.drag.id;            // worn (only fits its slot)
+      else if (drop === null && ui.drag.from === "slot") p.equip[ui.drag.slot] = null;  // dragged out = remove
+      ui.drag = null; ui.hover = null;
+    }
+  }
+  drawEquipIcon(x, y, s, item) {                       // procedural gear icon
+    const ctx = this.ctx, cx = x + s / 2, cy = y + s / 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.roundRect(x, y, s, s, 8); ctx.fill();
+    if (item.slot === "weapon") {
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "#cfd6e6"; ctx.lineWidth = Math.max(3, s * 0.09);   // blade
+      ctx.beginPath(); ctx.moveTo(cx - s * 0.2, cy + s * 0.24); ctx.lineTo(cx + s * 0.22, cy - s * 0.22); ctx.stroke();
+      ctx.strokeStyle = "#d9a441"; ctx.lineWidth = Math.max(3, s * 0.07);   // crossguard
+      ctx.beginPath(); ctx.moveTo(cx - s * 0.3, cy + s * 0.06); ctx.lineTo(cx - s * 0.06, cy + s * 0.3); ctx.stroke();
+      ctx.strokeStyle = "#7a4a1e"; ctx.lineWidth = Math.max(3, s * 0.08);   // hilt
+      ctx.beginPath(); ctx.moveTo(cx - s * 0.22, cy + s * 0.18); ctx.lineTo(cx - s * 0.32, cy + s * 0.28); ctx.stroke();
+    } else {
+      ctx.fillStyle = item.id === "leather_tunic" ? "#9a6a32" : "#5a6b8a";  // tunic
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.22, cy - s * 0.22); ctx.lineTo(cx + s * 0.22, cy - s * 0.22);
+      ctx.lineTo(cx + s * 0.3, cy + s * 0.26); ctx.lineTo(cx - s * 0.3, cy + s * 0.26);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.beginPath();                    // collar notch
+      ctx.moveTo(cx - s * 0.09, cy - s * 0.22); ctx.lineTo(cx + s * 0.09, cy - s * 0.22); ctx.lineTo(cx, cy - s * 0.05);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  drawEquipScreen() {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player, ui = this.ui;
+    const L = this.equipLayout();
+    this.drawWindow(L.x, L.y, L.w, L.h);
+    this.text("EQUIPMENT", L.x + 28, L.y + 44, { size: 24, bold: true, color: "#ffe9a0" });
+    this.text("ATK " + this.atkTotal() + "    DEF " + this.defTotal(), L.x + L.w - 28, L.y + 44, { size: 19, align: "right", color: "#9fd8ff" });
+    this.text("Drag gear into its slot.  Drag a slot out to remove.", L.x + 28, L.y + 76, { size: 14, color: "#cfd6ff" });
+
+    // owned gear list
+    for (const r of L.rows) {
+      const it = r.item, worn = p.equip[it.slot] === it.id;
+      ctx.globalAlpha = (ui.drag && ui.drag.id === it.id && ui.drag.from === "list") ? 0.35 : 1;
+      ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
+      this.drawEquipIcon(r.x + 6, r.y + 5, 44, it);
+      this.text(it.name, r.x + 62, r.y + 24, { size: 18, bold: true, color: "#eef1ff" });
+      const bonus = it.atk ? "+" + it.atk + " ATK" : "+" + it.def + " DEF";
+      this.text(EQUIP_SLOTLABEL[it.slot] + "   ·   " + bonus, r.x + 62, r.y + 44, { size: 14, color: "#bcd0f0" });
+      if (worn) this.text("equipped", r.x + r.w - 14, r.y + 28, { size: 13, align: "right", color: "#9cf0a0" });
+      ctx.globalAlpha = 1;
+    }
+    if (!L.rows.length) this.text("(no gear)", L.listX, L.listY + 20, { size: 18, color: "#9aa" });
+
+    // slots
+    this.text("WORN", L.slotX, L.slotY - 16, { size: 15, color: "#9fb0e8" });
+    for (const s of L.slots) {
+      const hover = ui.hover === s.slot && ui.drag && EQUIP_BY_ID[ui.drag.id].slot === s.slot;
+      ctx.fillStyle = hover ? "rgba(120,150,230,0.4)" : "rgba(0,0,0,0.35)";
+      ctx.strokeStyle = "rgba(220,228,255,0.7)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(s.x, s.y, s.w, s.h, 8); ctx.fill(); ctx.stroke();
+      this.text(EQUIP_SLOTLABEL[s.slot], s.x + s.w + 18, s.y + 26, { size: 16, bold: true, color: "#dfe4ff" });
+      const id = p.equip[s.slot];
+      if (id && !(ui.drag && ui.drag.from === "slot" && ui.drag.slot === s.slot)) {
+        this.drawEquipIcon(s.x + (s.w - 56) / 2, s.y + (s.h - 56) / 2, 56, EQUIP_BY_ID[id]);
+        this.text(EQUIP_BY_ID[id].name, s.x + s.w + 18, s.y + 50, { size: 14, color: "#9cf0a0" });
+      } else {
+        this.text("(empty)", s.x + s.w + 18, s.y + 50, { size: 14, color: "#8890b0" });
+      }
+    }
+
+    if (ui.drag) this.drawEquipIcon(ui.drag.mx - 28, ui.drag.my - 28, 56, EQUIP_BY_ID[ui.drag.id]);
+    this.text("ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+  }
+
   drawMainMenu() {
     const W = this.cv.width, p = this.player;
     // command list (top-right)
@@ -909,7 +1078,12 @@ class Game {
       this.text(r[1], colX + 260, ry, { size: 18, align: "right", color: "#eef" });
       this.bar(colX, ry + 8, 260, 10, r[2], r[3]);
     });
-    const stats = [["Attack", p.atk], ["Defense", p.def], ["Gold", p.gold + " GOLD"]];
+    const ab = this.equipBonus("atk"), db = this.equipBonus("def");
+    const stats = [
+      ["Attack", this.atkTotal() + (ab ? "  (" + p.atk + " +" + ab + ")" : "")],
+      ["Defense", this.defTotal() + (db ? "  (" + p.def + " +" + db + ")" : "")],
+      ["Gold", p.gold + " GOLD"],
+    ];
     stats.forEach(([k, v], i) => {
       const ry = y + 286 + i * 34;
       this.text(k, colX, ry, { size: 18, color: "#cfd6ff" });
@@ -1033,6 +1207,13 @@ class Game {
   }
   battleMsg(s) { this.battle.msg = s; }
   calcDmg(atk, def) { return Math.max(1, atk - def + (Math.floor(Math.random() * 4) - 1)); }
+  equipBonus(stat) {                                  // summed bonus from worn gear
+    let s = 0;
+    for (const slot of EQUIP_SLOTS) { const id = this.player.equip[slot]; if (id) s += EQUIP_BY_ID[id][stat] || 0; }
+    return s;
+  }
+  atkTotal() { return this.player.atk + this.equipBonus("atk"); }
+  defTotal() { return this.player.def + this.equipBonus("def"); }
   addFloat(who, val, color) { this.battle.floats.push({ who, text: "" + val, color, t: 900 }); }
   grantRewards() {
     const p = this.player, fromLv = p.lv, exp = 30, gold = 40;
@@ -1157,7 +1338,7 @@ class Game {
         if (b.step === "lunge") {
           b.heroLunge = Math.min(1, 1 - b.timer / 260);
           if (b.timer <= 0) {
-            const dmg = this.calcDmg(this.player.atk, b.enemy.def);
+            const dmg = this.calcDmg(this.atkTotal(), b.enemy.def);
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
             this.addFloat("enemy", dmg, "#ffffff");
             this.battleMsg(this.player.name + " strikes for " + dmg + "!");
@@ -1172,7 +1353,7 @@ class Game {
         if (b.step === "cast") {
           if (b.timer <= 0) {
             const sk = b.skill;
-            const base = this.player.atk * sk.power + (sk.kind === "bolt" ? 10 : 6);
+            const base = this.atkTotal() * sk.power + (sk.kind === "bolt" ? 10 : 6);
             const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
             this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
@@ -1188,7 +1369,7 @@ class Game {
         if (b.step === "lunge") {
           b.eLunge = Math.min(1, 1 - b.timer / 300);
           if (b.timer <= 0) {
-            let dmg = this.calcDmg(b.enemy.atk, this.player.def);
+            let dmg = this.calcDmg(b.enemy.atk, this.defTotal());
             if (b.shieldBuff) dmg = Math.max(1, Math.floor(dmg * 0.3));
             else if (b.defending) dmg = Math.max(1, Math.floor(dmg / 2));
             b.shieldBuff = false;
