@@ -22,6 +22,12 @@
     <div>Move: <b>WASD</b> / Arrows &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>ESC</b> menu</div>
   </div>
   <div id="loader">Loading the forest…</div>
-  <script src="game.js"></script>
+  <!-- classic scripts share one global scope; load order matters -->
+  <script src="src/config.js"></script>
+  <script src="src/world.js"></script>
+  <script src="src/game.js"></script>
+  <script src="src/render.js"></script>
+  <script src="src/battle.js"></script>
+  <script src="src/main.js"></script>
 </body>
 </html>
