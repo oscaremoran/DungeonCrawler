@@ -103,6 +103,12 @@ const ENEMY_TYPES = {
   lizard: {
     name: "Lizard", hp: 26, atk: 8, def: 3, exp: 30, gold: 40,
     intro: "A wild Lizard lunges from the grass!",
+    // hidden meter charges from damage dealt/taken; at full the enemy fires one of these two
+    skillMeter: 20,
+    skills: [
+      { name: "Venom Bite", kind: "hit", power: 1.7 },
+      { name: "Tail Sweep", kind: "double", power: 0.9 },
+    ],
     ow: { idle: "liz_sleep", alert: "liz_roar", tiles: 2.1 },
     battle: { idle: "liz_idle", attack: "liz_attack", hurt: "liz_hurt", death: "liz_death", h: 0.30, flip: true },
   },
@@ -110,12 +116,22 @@ const ENEMY_TYPES = {
     name: "Goblin", hp: 45, atk: 16, def: 4, exp: 41, gold: 50,
     intro: "A Goblin slashes at you!",
     drop: { id: "rusty_dagger", rate: 0.55 },
+    skillMeter: 20,
+    skills: [
+      { name: "Frenzy", kind: "buff", buff: 1.35 },
+      { name: "Savage Cleave", kind: "double", power: 1.0 },
+    ],
     ow: { idle: "gob_idle", alert: "gob_attack", tiles: 1.6 },
     battle: { idle: "gob_idle", attack: "gob_attack", hurt: "gob_hurt", death: "gob_die", h: 0.26, flip: false },
   },
   troll: {
     name: "Troll", hp: 200, atk: 26, def: 15, exp: 150, gold: 90, boss: true,
     intro: "The Troll swipes at you!",
+    skillMeter: 35,
+    skills: [
+      { name: "Boulder Throw", kind: "hit", power: 1.8 },
+      { name: "Enrage", kind: "buff", buff: 1.4 },
+    ],
     ow: { idle: "troll_idle", alert: "troll_attack", tiles: 3.1 },
     battle: { idle: "troll_idle", attack: "troll_attack", hurt: "troll_hurt", death: "troll_death", h: 0.44, flip: false },
   },

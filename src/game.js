@@ -2,6 +2,46 @@ class Game {
   constructor(canvas, art) {
     this.cv = canvas; this.ctx = canvas.getContext("2d");
     this.art = art;
+
+    this.newGame();             // build the world + a fresh hero (re-run by New Game)
+
+    // --- screen / flow state ---
+    this.state = "title";       // title | difficulty | name | overworld
+    this.t = 0;                 // running clock (ms), for animation
+    this.titleSel = 0;          // 0 = New Game, 1 = Continue
+    this.fade = 1;              // 1 = black; fades in on load
+    this.exiting = false; this.exitTo = null;
+    this.hud = document.getElementById("hud");
+
+    this.keys = {};
+    addEventListener("keydown", e => {
+      const key = e.key.toLowerCase();
+      if (["arrowup","arrowdown","arrowleft","arrowright"," ","enter","backspace","tab"].includes(key))
+        e.preventDefault();
+      if (!e.repeat) this.onKey(key);     // discrete (menu) actions
+      this.keys[key] = true;              // continuous (movement) state
+    });
+    addEventListener("keyup", e => { this.keys[e.key.toLowerCase()] = false; });
+
+    // mouse (used for skill drag & drop)
+    const toCanvas = e => {
+      const r = this.cv.getBoundingClientRect();
+      return [(e.clientX - r.left) * (this.cv.width / r.width), (e.clientY - r.top) * (this.cv.height / r.height)];
+    };
+    this.cv.addEventListener("mousedown", e => { const [x, y] = toCanvas(e); this.onMouse("down", x, y); });
+    addEventListener("mousemove", e => { const [x, y] = toCanvas(e); this.onMouse("move", x, y); });
+    addEventListener("mouseup", e => { const [x, y] = toCanvas(e); this.onMouse("up", x, y); });
+
+    this.resize(); addEventListener("resize", () => this.resize());
+    this.last = performance.now();
+    requestAnimationFrame(t => this.loop(t));
+  }
+
+  /* (re)initialize a fresh run: rebuild every area, respawn enemies/NPCs, and
+     reset the hero + all per-run flags. Called from the constructor and whenever
+     the player picks New Game (otherwise a new game would inherit the last run's
+     dead hero — 0 HP, last position). Screen/flow state is left to the caller. */
+  newGame() {
     this.areas = {
       forest: buildWorld(1337), room2: buildRoom2(), room3: buildRoom3(), koro: buildKoro(),
       koro_def:   buildKoroInterior({ shop: "def",   returnEntry: "from_def" }),
@@ -29,7 +69,7 @@ class Game {
       animT: 0, frame: 0,
       wTiles: 1.15,       // drawn width in tiles
       // --- RPG stats ---
-      name: "GARRAN", job: "Wanderer",
+      name: "GARRAN", job: "Warrior",
       lv: 1, exp: 0, expNext: 24,
       hp: 30, maxhp: 30, mp: 8, maxmp: 8,
       atk: 9, def: 5, gold: 150,
@@ -64,39 +104,8 @@ class Game {
     this.difficultySel = 1;     // 0 Casual, 1 Normal, 2 Hard, 3 Hardcore
 
     // --- per-run stats, surfaced on the You Died screen ---
-    this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null };
+    this.resetRunStats();
     this.gameover = null;       // null | { sel: 0|1 }  (Continue / Home)
-
-    // --- screen / flow state ---
-    this.state = "title";       // title | difficulty | name | overworld
-    this.t = 0;                 // running clock (ms), for animation
-    this.titleSel = 0;          // 0 = New Game, 1 = Continue
-    this.fade = 1;              // 1 = black; fades in on load
-    this.exiting = false; this.exitTo = null;
-    this.hud = document.getElementById("hud");
-
-    this.keys = {};
-    addEventListener("keydown", e => {
-      const key = e.key.toLowerCase();
-      if (["arrowup","arrowdown","arrowleft","arrowright"," ","enter","backspace","tab"].includes(key))
-        e.preventDefault();
-      if (!e.repeat) this.onKey(key);     // discrete (menu) actions
-      this.keys[key] = true;              // continuous (movement) state
-    });
-    addEventListener("keyup", e => { this.keys[e.key.toLowerCase()] = false; });
-
-    // mouse (used for skill drag & drop)
-    const toCanvas = e => {
-      const r = this.cv.getBoundingClientRect();
-      return [(e.clientX - r.left) * (this.cv.width / r.width), (e.clientY - r.top) * (this.cv.height / r.height)];
-    };
-    this.cv.addEventListener("mousedown", e => { const [x, y] = toCanvas(e); this.onMouse("down", x, y); });
-    addEventListener("mousemove", e => { const [x, y] = toCanvas(e); this.onMouse("move", x, y); });
-    addEventListener("mouseup", e => { const [x, y] = toCanvas(e); this.onMouse("up", x, y); });
-
-    this.resize(); addEventListener("resize", () => this.resize());
-    this.last = performance.now();
-    requestAnimationFrame(t => this.loop(t));
   }
 
   /* discrete key presses, routed by screen */
@@ -109,7 +118,7 @@ class Game {
         if (this.titleSel === 1) {                  // Continue -> save-picker
           if (this.hasSave()) { this.saveSel = 0; this.beginTransition("saveselect"); }
           else this.flash = { text: "No saved game found.", t: 1500 };
-        } else { this.resetRunStats(); this.beginTransition("difficulty"); } // New Game -> pick difficulty
+        } else { this.newGame(); this.beginTransition("difficulty"); } // New Game -> fresh hero + pick difficulty
       }
       return;
     }
@@ -190,8 +199,10 @@ class Game {
     const ui = this.ui;
     const back = () => { ui.screen === "main" ? (this.ui = null) : (this.ui = { screen: "main", sel: 0 }); };
     if (key === "escape") return back();
-    // Tab toggles the active character on the Skills/Equip screens (if an ally is recruited).
-    if (key === "tab" && (ui.screen === "skills" || ui.screen === "equip")) {
+    // Switch the active character with ← / → on the Skills/Equip screens (if an ally is recruited).
+    const switchKey = (ui.screen === "skills" || ui.screen === "equip")
+      && (key === "arrowright" || key === "arrowleft");
+    if (switchKey) {
       if (this.player.party.some(m => m.id === "ally")) {
         ui.target = ui.target === "ally" ? "hero" : "ally";
         ui.drag = null; ui.hover = ui.screen === "skills" ? -1 : null;
@@ -255,8 +266,8 @@ class Game {
         this.dialogue = {
           name: n.name, page: 0, portrait: n.sprite,
           lines: [
-            ["You're the one who felled the Troll?", "Nice work, the boss says to"],
-            ["go to Xal'Korr, City of Bone.", "It's deadly, but", "we'd make a better profit."],
+            ["You're the one who felled the Troll?", "Nice work, the boss says to", "go to Xal'Korr, City of Bone."],
+            ["It's deadly, but", "we'd make a better profit."],
             ["Let me come with you.", "Two blades are better than one."],
           ],
           onClose: () => this.beginNameContact(n),
@@ -285,6 +296,7 @@ class Game {
     const lv = p.lv;
     p.party.push({
       id: "ally", name: nm, sprite: n.sprite,
+      lv, exp: 0, expNext: 24 + (lv - 1) * 12,        // Elara levels up alongside the hero
       maxhp: 28 + lv * 4, hp: 28 + lv * 4,
       maxmp: 6 + lv * 2, mp: 6 + lv * 2,
       atk: 7 + lv, def: 3 + ((lv / 2) | 0),

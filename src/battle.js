@@ -11,9 +11,10 @@ Object.assign(Game.prototype, {
     const eAtk = Math.max(1, Math.round(cfg.atk * m));
     this.battle = {
       target, cfg,
-      enemy: { name: cfg.name, hp: eHp, maxhp: eHp, atk: eAtk, def: cfg.def, hurtT: 0, dead: false, deathT: 0 },
+      enemy: { name: cfg.name, hp: eHp, maxhp: eHp, atk: eAtk, def: cfg.def, hurtT: 0, dead: false, deathT: 0,
+               meter: 0, meterMax: cfg.skillMeter || 60 },   // hidden charge meter for enemy skills
       ally: am ? {
-        name: am.name, sprite: am.sprite,
+        name: am.name, sprite: am.sprite, lv: am.lv ?? this.player.lv,
         // pull in her current pools and equip bonuses so battle reads everything off `b.ally`
         hp: am.hp ?? am.maxhp, maxhp: am.maxhp,
         mp: am.mp ?? (am.maxmp ?? 0), maxmp: am.maxmp ?? 0,
@@ -22,11 +23,12 @@ Object.assign(Game.prototype, {
         hurtT: 0, ko: false, lunge: 0,
       } : null,
       heroCmds: ["Attack", "Skill", "Defend", "Item", "Run"],
-      allyCmds: ["Attack", "Skill", "Defend", "Item"],
+      allyCmds: ["Attack", "Skill", "Defend", "Item", "Run"],
       actor: "hero",
       cmds: ["Attack", "Skill", "Defend", "Item", "Run"], sel: 0,
       phase: "intro", step: "", timer: 1100, msg: cfg.intro,
-      heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0,
+      heroKO: false,
+      heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0, enemySkill: null, skillFlash: null,
       defending: false, allyDefending: false, shieldBuff: false, allyShieldBuff: false,
       floats: [], animT: 0, fx: null, sub: null,
     };
@@ -34,20 +36,101 @@ Object.assign(Game.prototype, {
   battleMsg(s) { this.battle.msg = s; },
   calcDmg(atk, def) { return Math.max(1, atk - def + (Math.floor(Math.random() * 4) - 1)); },
   addFloat(who, val, color) { this.battle.floats.push({ who, text: "" + val, color, t: 900 }); },
+
+  /* the enemy lands a blow on "hero" or "ally": applies defend/shield mitigation,
+     hp + KO bookkeeping, and a damage float. Returns the damage dealt. */
+  enemyHit(who, atkVal, announce) {
+    const b = this.battle;
+    if (who === "ally") {
+      let dmg = this.calcDmg(atkVal, b.ally.def);
+      if (b.allyShieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.allyShieldBuff = false; }
+      else if (b.allyDefending) dmg = Math.max(1, Math.floor(dmg / 2));
+      b.ally.hp = Math.max(0, b.ally.hp - dmg); b.ally.hurtT = 400;
+      this.addFloat("ally", dmg, "#ff8a8a");
+      b.enemy.meter += Math.ceil(dmg * 0.5);          // dealing damage also charges its meter
+      if (b.ally.hp <= 0) { b.ally.ko = true; this.battleMsg(b.ally.name + " is knocked out!"); }
+      else if (announce) this.battleMsg(b.ally.name + " takes " + dmg + " damage!");
+      return dmg;
+    }
+    let dmg = this.calcDmg(atkVal, this.defTotal());
+    if (b.shieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.shieldBuff = false; }
+    else if (b.defending) dmg = Math.max(1, Math.floor(dmg / 2));
+    this.player.hp = Math.max(0, this.player.hp - dmg); b.heroHurt = 400;
+    this.addFloat("hero", dmg, "#ff8a8a");
+    b.enemy.meter += Math.ceil(dmg * 0.5);            // dealing damage also charges its meter
+    // a fallen hero is only "down", not game over, while Elara still stands
+    if (this.player.hp <= 0 && !b.heroKO) { b.heroKO = true; this.battleMsg(this.player.name + " is knocked out!"); }
+    else if (announce) this.battleMsg(this.player.name + " takes " + dmg + " damage!");
+    return dmg;
+  },
+
+  /* resolve a charged enemy skill (called at the impact frame) */
+  applyEnemySkill(sk) {
+    const b = this.battle, e = b.enemy, nm = "The " + e.name;
+    if (sk.kind === "heal") {
+      const amt = Math.round(e.maxhp * (sk.heal || 0.25));
+      const heal = Math.min(amt, e.maxhp - e.hp); e.hp += heal;
+      this.addFloat("enemy", "+" + heal, "#9cf0a0");
+      this.battleMsg(nm + " recovers " + heal + " HP!");
+    } else if (sk.kind === "buff") {
+      e.atk = Math.round(e.atk * (sk.buff || 1.3));
+      this.battleMsg(nm + " works into a frenzy — its attack rises!");
+    } else if (sk.kind === "double") {
+      const atk = Math.round(e.atk * (sk.power || 1));
+      this.enemyHit("hero", atk, false);
+      if (b.ally && !b.ally.ko) this.enemyHit("ally", atk, false);
+      this.battleMsg(nm + "'s " + sk.name + " tears through the party!");
+    } else { // "hit" — a heavy single-target strike
+      const allyUp = b.ally && !b.ally.ko;
+      const who = b.heroKO ? "ally" : (allyUp && Math.random() < 0.4 ? "ally" : "hero");
+      this.enemyHit(who, Math.round(e.atk * (sk.power || 1.5)), true);
+    }
+  },
+
   grantRewards() {
-    const p = this.player, cfg = this.battle.cfg, fromLv = p.lv, exp = cfg.exp, gold = cfg.gold;
-    p.exp += exp; p.gold += gold;
-    const gains = { hp: 0, mp: 0, atk: 0, def: 0 }, newSkills = [];
-    while (p.exp >= p.expNext) {                     // possibly several levels
-      p.exp -= p.expNext; p.lv++; p.expNext += 12;
-      p.maxhp += 6; p.maxmp += 2; p.atk += 2; p.def += 1;
-      gains.hp += 6; gains.mp += 2; gains.atk += 2; gains.def += 1;
+    const p = this.player, b = this.battle, cfg = b.cfg, exp = cfg.exp, gold = cfg.gold;
+    p.gold += gold;
+    const levelups = [];                             // one entry per character who leveled
+
+    // --- hero ---
+    {
+      const fromLv = p.lv, gains = { hp: 0, mp: 0, atk: 0, def: 0 }, newSkills = [];
+      p.exp += exp;
+      while (p.exp >= p.expNext) {                    // possibly several levels
+        p.exp -= p.expNext; p.lv++; p.expNext += 12;
+        p.maxhp += 6; p.maxmp += 2; p.atk += 2; p.def += 1;
+        gains.hp += 6; gains.mp += 2; gains.atk += 2; gains.def += 1;
+      }
+      if (p.lv > fromLv) {
+        p.hp = p.maxhp; p.mp = p.maxmp;
+        for (const s of SKILLS) if (s.unlock > fromLv && s.unlock <= p.lv) newSkills.push(s.name);
+        levelups.push({ name: p.name, fromLv, toLv: p.lv, gains, newSkills });
+      }
     }
-    const leveled = p.lv > fromLv;
-    if (leveled) {
-      p.hp = p.maxhp; p.mp = p.maxmp;
-      for (const s of SKILLS) if (s.unlock > fromLv && s.unlock <= p.lv) newSkills.push(s.name);
+
+    // --- Elara (each recruited ally levels up too) ---
+    for (const am of p.party) {
+      if (am.id !== "ally") continue;
+      if (am.lv == null) { am.lv = p.lv; am.exp = 0; am.expNext = 24 + (am.lv - 1) * 12; }  // back-compat for old saves
+      const fromLv = am.lv, gains = { hp: 0, mp: 0, atk: 0, def: 0 };
+      am.exp += exp;
+      while (am.exp >= am.expNext) {
+        am.exp -= am.expNext; am.lv++; am.expNext += 12;
+        am.maxhp += 5; am.maxmp += 2; am.atk += 2; am.def += 1;
+        gains.hp += 5; gains.mp += 2; gains.atk += 2; gains.def += 1;
+      }
+      if (am.lv > fromLv) {
+        am.hp = am.maxhp; am.mp = am.maxmp;            // level-up fully restores (and revives) her
+        if (b.ally) {                                 // reflect into the live battle copy so it shows + persists
+          b.ally.ko = false; b.ally.lv = am.lv;
+          b.ally.hp = am.hp; b.ally.maxhp = am.maxhp;
+          b.ally.mp = am.mp; b.ally.maxmp = am.maxmp;
+          b.ally.atk = this.atkTotalFor(am); b.ally.def = this.defTotalFor(am);
+        }
+        levelups.push({ name: am.name, fromLv, toLv: am.lv, gains, newSkills: [] });
+      }
     }
+
     // gear drop (e.g. goblins drop the Rusty Dagger)
     let drop = null;
     if (cfg.drop && Math.random() < cfg.drop.rate) {
@@ -55,7 +138,8 @@ Object.assign(Game.prototype, {
       if (!p.equipOwned.includes(g.id)) p.equipOwned.push(g.id);
       drop = g.name;
     }
-    this.battle.reward = { exp, gold, leveled, gains, newSkills, fromLv, toLv: p.lv, drop };
+    b.levelups = levelups; b.levelIdx = 0;
+    b.reward = { exp, gold, drop, leveled: levelups.length > 0 };
   },
   enemyDies() {
     const b = this.battle;
@@ -81,6 +165,22 @@ Object.assign(Game.prototype, {
     b.actor = "hero";
     b.phase = "enemy_pre"; b.timer = 600;
   },
+  /* begin the next round: the hero acts, unless he's down — then Elara carries on.
+     Game over only fires when every party member has fallen. */
+  startHeroTurn() {
+    const b = this.battle;
+    const allyUp = b.ally && !b.ally.ko;
+    if (!b.heroKO) {
+      b.actor = "hero"; b.cmds = b.heroCmds.slice();
+      b.sel = 0; b.phase = "menu"; b.msg = "";
+    } else if (allyUp) {
+      b.actor = "ally"; b.cmds = b.allyCmds.slice();
+      b.sel = 0; b.phase = "menu"; b.msg = ""; b.allyDefending = false;
+    } else {
+      this.stats.lastKiller = b.enemy.name;
+      b.phase = "lose"; b.msg = this.player.name + " has fallen...  (ENTER)";
+    }
+  },
   endBattle(result) {
     const tgt = this.battle && this.battle.target;
     // persist Elara's hp/mp back to the party member before tearing down the battle state
@@ -92,6 +192,7 @@ Object.assign(Game.prototype, {
         if (am.hp <= 0) am.hp = 1;                    // revive at 1 HP if she fell during battle
       }
     }
+    if (result !== "lose" && this.player.hp <= 0) this.player.hp = 1;  // a downed hero comes to after the fight
     this.battle = null; this.encounterCD = 1700;
     if (result === "lose") {                          // -> You Died screen with run stats
       this.beginGameOver();
@@ -133,8 +234,15 @@ Object.assign(Game.prototype, {
   battleKey(key) {
     const b = this.battle; if (!b) return;
     const enter = key === "enter" || key === " ";
-    if (b.phase === "victory") { if (enter) (b.reward.leveled ? (b.phase = "levelup", b.levelT = 0) : this.endBattle("win")); return; }
-    if (b.phase === "levelup") { if (enter) this.endBattle("win"); return; }
+    if (b.phase === "victory") { if (enter) (b.reward.leveled ? (b.phase = "levelup", b.levelT = 0, b.levelIdx = 0) : this.endBattle("win")); return; }
+    if (b.phase === "levelup") {
+      if (enter) {
+        b.levelIdx++;
+        if (b.levelIdx < b.levelups.length) b.levelT = 0;   // show the next character's screen
+        else this.endBattle("win");
+      }
+      return;
+    }
     if (b.phase === "lose") { if (enter) this.endBattle("lose"); return; }
 
     if (b.phase === "submenu") {
@@ -241,6 +349,7 @@ Object.assign(Game.prototype, {
     b.animT += dt; b.timer -= dt;
     if (b.enemy.hurtT > 0) b.enemy.hurtT -= dt;
     if (b.heroHurt > 0) b.heroHurt -= dt;
+    if (b.ally && b.ally.hurtT > 0) b.ally.hurtT -= dt;   // otherwise her hurt frame sticks forever
     if (b.fx) b.fx.t += dt;
     if (b.phase === "victory") b.victoryT = (b.victoryT || 0) + dt;
     if (b.phase === "levelup") b.levelT = (b.levelT || 0) + dt;
@@ -255,7 +364,7 @@ Object.assign(Game.prototype, {
           if (b.timer <= 0) {
             const dmg = this.calcDmg(this.atkTotal(), b.enemy.def);
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
-            this.stats.dmgDealt += dmg;
+            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
             this.addFloat("enemy", dmg, "#ffffff");
             this.battleMsg(this.player.name + " strikes for " + dmg + "!");
             b.step = "return"; b.timer = 420;
@@ -272,7 +381,7 @@ Object.assign(Game.prototype, {
             const base = this.atkTotal() * sk.power + (sk.kind === "bolt" ? 10 : 6);
             const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
-            this.stats.dmgDealt += dmg;
+            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
             this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
             this.battleMsg(sk.name + " hits for " + dmg + "!");
             b.step = "impact"; b.timer = 520;
@@ -288,7 +397,7 @@ Object.assign(Game.prototype, {
           if (b.timer <= 0) {
             const dmg = this.calcDmg(b.ally.atk, b.enemy.def);
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
-            this.stats.dmgDealt += dmg;
+            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
             this.addFloat("enemy", dmg, "#ffd0a0");
             this.battleMsg(b.ally.name + " hits for " + dmg + "!");
             b.step = "return"; b.timer = 380;
@@ -305,7 +414,7 @@ Object.assign(Game.prototype, {
             const base = b.ally.atk * sk.power + (sk.kind === "bolt" ? 10 : 6);
             const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
-            this.stats.dmgDealt += dmg;
+            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
             this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
             this.battleMsg(sk.name + " hits for " + dmg + "!");
             b.step = "impact"; b.timer = 520;
@@ -313,46 +422,43 @@ Object.assign(Game.prototype, {
         } else if (b.timer <= 0) { b.fx = null; this.afterAllyAction(); }
         break;
       case "enemy_pre":
-        if (b.timer <= 0) { b.phase = "enemy_attack"; b.step = "lunge"; b.timer = 300; b.eLunge = 0; this.battleMsg("The " + b.enemy.name + " attacks!"); }
+        if (b.timer <= 0) {
+          // when the hidden meter is full, the enemy unleashes one of its two skills
+          if (b.enemy.meter >= b.enemy.meterMax && b.cfg.skills && b.cfg.skills.length) {
+            b.enemy.meter = 0;
+            b.enemy.meterMax = Math.round(b.enemy.meterMax * 1.5);   // each use makes the next cost 50% more
+            b.enemySkill = b.cfg.skills[(Math.random() * b.cfg.skills.length) | 0];
+            b.phase = "enemy_skill"; b.step = "wind"; b.timer = 560; b.eLunge = 0;
+            this.battleMsg("The " + b.enemy.name + " uses " + b.enemySkill.name + "!");
+          } else {
+            b.phase = "enemy_attack"; b.step = "lunge"; b.timer = 300; b.eLunge = 0;
+            this.battleMsg("The " + b.enemy.name + " attacks!");
+          }
+        }
         break;
       case "enemy_attack":
         if (b.step === "lunge") {
           b.eLunge = Math.min(1, 1 - b.timer / 300);
           if (b.timer <= 0) {
             // the enemy sometimes lunges at Elara instead of the hero
-            const atAlly = b.ally && !b.ally.ko && Math.random() < 0.4;
-            if (atAlly) {
-              let dmg = this.calcDmg(b.enemy.atk, b.ally.def);
-              if (b.allyShieldBuff) dmg = Math.max(1, Math.floor(dmg * 0.3));
-              else if (b.allyDefending) dmg = Math.max(1, Math.floor(dmg / 2));
-              b.allyShieldBuff = false;
-              b.ally.hp = Math.max(0, b.ally.hp - dmg); b.ally.hurtT = 400;
-              this.addFloat("ally", dmg, "#ff8a8a");
-              if (b.ally.hp <= 0) { b.ally.ko = true; this.battleMsg(b.ally.name + " is knocked out!"); }
-              else this.battleMsg(b.ally.name + " takes " + dmg + " damage!");
-            } else {
-              let dmg = this.calcDmg(b.enemy.atk, this.defTotal());
-              if (b.shieldBuff) dmg = Math.max(1, Math.floor(dmg * 0.3));
-              else if (b.defending) dmg = Math.max(1, Math.floor(dmg / 2));
-              b.shieldBuff = false;
-              this.player.hp = Math.max(0, this.player.hp - dmg); b.heroHurt = 400;
-              this.addFloat("hero", dmg, "#ff8a8a");
-              this.battleMsg(this.player.name + " takes " + dmg + " damage!");
-            }
+            // (and always targets her if the hero is already down)
+            const allyUp = b.ally && !b.ally.ko;
+            const atAlly = allyUp && (b.heroKO || Math.random() < 0.4);
+            this.enemyHit(atAlly ? "ally" : "hero", b.enemy.atk, true);
             b.step = "return"; b.timer = 420;
           }
         } else {
           b.eLunge = Math.max(0, b.timer / 420);
-          if (b.timer <= 0) {
-            if (this.player.hp <= 0) {
-              this.stats.lastKiller = b.enemy.name;
-              b.phase = "lose"; b.msg = this.player.name + " has fallen...  (ENTER)";
-            }
-            else {
-              b.actor = "hero"; b.cmds = b.heroCmds.slice();
-              b.sel = 0; b.phase = "menu"; b.msg = "";
-            }
-          }
+          if (b.timer <= 0) this.startHeroTurn();
+        }
+        break;
+      case "enemy_skill":
+        if (b.step === "wind") {
+          b.eLunge = Math.min(1, 1 - b.timer / 560);
+          if (b.timer <= 0) { this.applyEnemySkill(b.enemySkill); b.step = "impact"; b.timer = 620; b.skillFlash = b.enemySkill.kind; }
+        } else {
+          b.eLunge = Math.max(0, b.timer / 620);
+          if (b.timer <= 0) { b.skillFlash = null; this.startHeroTurn(); }
         }
         break;
       case "enemy_die":
@@ -369,6 +475,49 @@ Object.assign(Game.prototype, {
     if (flip) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
     ctx.drawImage(img, cx - w / 2, baseY - targetH, w, targetH);
     ctx.restore();
+  },
+
+  /* a weapon swung in the attacker's forward hand during an Attack.
+     swing 0 = wound up over the shoulder, 1 = chopped forward toward the foe.
+     facing left (toward the enemy) unless `faceRight`. */
+  drawHandWeapon(cx, baseY, charH, swing, weaponId, faceRight) {
+    const ctx = this.ctx, dir = faceRight ? -1 : 1;     // dir 1 = blade sweeps to the left
+    const eq = weaponId && EQUIP_BY_ID[weaponId];
+    const dagger = eq && /dagger/i.test(eq.id);
+    const len = charH * (dagger ? 0.34 : 0.52);
+    // hand sits on the forward side, a little above mid-body
+    const hx = cx - dir * charH * 0.12, hy = baseY - charH * 0.46;
+    const angle = dir * (0.5 - swing * 2.4);            // raise -> chop
+    ctx.save();
+    ctx.translate(hx, hy);
+    ctx.rotate(angle);
+    if (dir < 0) ctx.scale(-1, 1);                      // keep art upright when facing right
+    const img = eq && eq.sprite && this.art[eq.sprite];
+    if (img) {
+      const w = len * (img.width / img.height);
+      ctx.drawImage(img, -w / 2, -len, w, len);
+    } else {
+      this.drawBlade(len, dagger);
+    }
+    ctx.restore();
+  },
+  /* a simple procedural sword/dagger, hilt at the origin, blade pointing up (-y) */
+  drawBlade(len, dagger) {
+    const ctx = this.ctx, bw = Math.max(4, len * (dagger ? 0.16 : 0.11));
+    ctx.fillStyle = "#5a3a1c";                          // grip
+    ctx.fillRect(-bw * 0.45, 0, bw * 0.9, len * 0.2);
+    ctx.fillStyle = "#3a2410";                          // pommel
+    ctx.beginPath(); ctx.arc(0, len * 0.2, bw * 0.55, 0, 7); ctx.fill();
+    ctx.fillStyle = "#caa83c";                          // crossguard
+    ctx.fillRect(-bw * 1.5, -2, bw * 3, 5);
+    ctx.beginPath();                                    // blade
+    ctx.moveTo(-bw * 0.7, 0); ctx.lineTo(bw * 0.7, 0);
+    ctx.lineTo(bw * 0.32, -len * 0.85); ctx.lineTo(0, -len); ctx.lineTo(-bw * 0.32, -len * 0.85);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(-bw, 0, bw, 0);
+    g.addColorStop(0, "#8b97a4"); g.addColorStop(0.5, "#f2f6fa"); g.addColorStop(1, "#717d8b");
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = "rgba(40,50,60,0.5)"; ctx.lineWidth = 1; ctx.stroke();
   },
 
   renderBattle() {
@@ -391,12 +540,6 @@ Object.assign(Game.prototype, {
     const hxX = W * 0.74, hBaseY = H * 0.66;
     const ayX = W * 0.88, ayBaseY = H * 0.55;        // Elara stands behind & right of the hero
 
-    // platform shadows
-    const platShadow = (cx, by, rx) => {
-      ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.beginPath();
-      ctx.ellipse(cx, by, rx, rx * 0.3, 0, 0, 7); ctx.fill();
-    };
-
     // --- enemy, faces right toward the hero (sprite groups vary by type) ---
     if (b.phase !== "victory" && b.phase !== "levelup") {
       const A = b.cfg.battle;
@@ -404,10 +547,9 @@ Object.assign(Game.prototype, {
       let grp = A.idle, fr = 0, eOff = 0, jitter = 0;
       if (b.enemy.dead) { grp = A.death; fr = Math.min(nf(grp), (b.enemy.deathT / (1000 / 6)) | 0); }
       else if (b.enemy.hurtT > 0) { grp = A.hurt; fr = Math.min(nf(grp), ((380 - b.enemy.hurtT) / (380 / ANIM_FRAMES[grp])) | 0); jitter = (Math.random() - 0.5) * 6; }
-      else if (b.phase === "enemy_attack") { grp = A.attack; fr = Math.min(nf(grp), (b.eLunge * ANIM_FRAMES[grp]) | 0); eOff = b.eLunge * 80; }
+      else if (b.phase === "enemy_attack" || b.phase === "enemy_skill") { grp = A.attack; fr = Math.min(nf(grp), (b.eLunge * ANIM_FRAMES[grp]) | 0); eOff = b.eLunge * (b.phase === "enemy_skill" ? 60 : 80); }
       else { grp = A.idle; fr = ((b.animT / 180) | 0) % ANIM_FRAMES[grp]; }
       const eAlpha = b.enemy.dead ? Math.max(0, 1 - b.enemy.deathT / 1300) : 1;
-      platShadow(exX, eBaseY + 4, H * A.h * 0.42);
       ctx.globalAlpha = eAlpha;
       this.drawBattleSprite(art[`${grp}_${fr}`], exX + eOff + jitter, eBaseY, H * A.h, A.flip);
       ctx.globalAlpha = 1;
@@ -420,8 +562,11 @@ Object.assign(Game.prototype, {
     const casting = b.phase === "hero_skill";
     const hFrame = (b.phase === "hero_attack" && b.step === "lunge") || casting ? art.walk_2 : art.idle;
     if (b.phase !== "victory" && b.phase !== "levelup") {
-      platShadow(hxX, hBaseY + 4, 46);
-      this.drawBattleSprite(hFrame, hxX + hOff + hjit, hBaseY, H * 0.26, false);
+      ctx.globalAlpha = b.heroKO ? 0.4 : 1;           // a downed hero is greyed out
+      const hcx = hxX + hOff + hjit;
+      this.drawBattleSprite(hFrame, hcx, hBaseY, H * 0.26, false);
+      if (b.phase === "hero_attack") this.drawHandWeapon(hcx, hBaseY, H * 0.26, b.heroLunge, this.player.equip.weapon, false);
+      ctx.globalAlpha = 1;
     }
 
     // --- Elara, fighting beside the hero ---
@@ -431,9 +576,13 @@ Object.assign(Game.prototype, {
       else if (b.ally.hurtT > 0) { aImg = art.ally_hurt; ajit = (Math.random() - 0.5) * 6; }
       else if (b.phase === "ally_attack" && b.step === "lunge") { aImg = art.ally_walk_1; aOff = -b.allyLunge * 80; }
       const bob = b.ally.ko ? 0 : Math.sin(b.animT / 300) * 2;
-      platShadow(ayX, ayBaseY + 4, 38);
+      const acx = ayX + aOff + ajit;
       ctx.globalAlpha = b.ally.ko ? 0.45 : 1;
-      this.drawBattleSprite(aImg, ayX + aOff + ajit, ayBaseY + bob, H * 0.22, false);
+      this.drawBattleSprite(aImg, acx, ayBaseY + bob, H * 0.22, false);
+      if (b.phase === "ally_attack") {
+        const am = this.player.party.find(m => m.id === "ally");
+        this.drawHandWeapon(acx, ayBaseY + bob, H * 0.22, b.allyLunge, am && am.equip && am.equip.weapon, false);
+      }
       ctx.globalAlpha = 1;
     }
 
@@ -467,6 +616,14 @@ Object.assign(Game.prototype, {
       ctx.globalAlpha = 1;
     }
 
+    // --- enemy-skill impact flash (color cues the kind of skill) ---
+    if (b.phase === "enemy_skill" && b.step === "impact" && b.skillFlash) {
+      const fade = Math.max(0, b.timer / 620);
+      const col = b.skillFlash === "heal" ? "120,220,120"
+        : b.skillFlash === "buff" ? "240,150,40" : "210,40,40";
+      ctx.fillStyle = `rgba(${col},${0.32 * fade})`; ctx.fillRect(0, 0, W, H);
+    }
+
     // --- boss banner (top): name in big text + a wide red HP bar ---
     const boss = b.cfg.boss;
     if (boss && b.phase !== "victory" && b.phase !== "levelup") {
@@ -494,8 +651,9 @@ Object.assign(Game.prototype, {
     // --- status window (bottom-left) ---
     const sy = H - 150, sh = 126, sw = 320, sr = 40 + sw - 16;
     this.drawWindow(40, sy, sw, sh);
-    this.text(p.name, 64, sy + 34, { size: 20, bold: true, color: "#ffe9a0" });
-    this.text("LV " + p.lv, sr, sy + 34, { size: 16, align: "right", color: "#cfd6ff" });
+    this.text(p.name, 64, sy + 34, { size: 20, bold: true, color: b.heroKO ? "#e88" : "#ffe9a0" });
+    if (b.heroKO) this.text("DOWN", sr, sy + 34, { size: 16, align: "right", color: "#e88" });
+    else this.text("LV " + p.lv, sr, sy + 34, { size: 16, align: "right", color: "#cfd6ff" });
     this.text("HP", 64, sy + 66, { size: 15, color: "#bfe8c0" });
     this.text(p.hp + " / " + p.maxhp, sr, sy + 66, { size: 15, align: "right", color: "#eef" });
     this.bar(96, sy + 74, sw - 120, 9, p.hp / p.maxhp, "#5cd06a");
@@ -503,31 +661,33 @@ Object.assign(Game.prototype, {
     this.text(p.mp + " / " + p.maxmp, sr, sy + 104, { size: 15, align: "right", color: "#eef" });
     this.bar(96, sy + 112, sw - 120, 9, p.mp / p.maxmp, "#5aa6f0");
 
-    // --- Elara status (a compact bar just above the hero's panel) ---
+    // --- Elara status (its own panel between the hero's panel and the action menu) ---
     if (b.ally) {
-      const ay = sy - 86, ah = 78;
-      this.drawWindow(40, ay, sw, ah);
-      this.text(b.ally.name, 64, ay + 24, { size: 17, bold: true, color: b.ally.ko ? "#a08" : "#ffd0e0" });
-      if (b.ally.ko) this.text("DOWN", sr, ay + 24, { size: 14, align: "right", color: "#e88" });
-      else this.text(b.ally.hp + " / " + b.ally.maxhp, sr, ay + 24, { size: 14, align: "right", color: "#eef" });
-      this.bar(64, ay + 30, sw - 48, 7, Math.max(0, b.ally.hp / b.ally.maxhp), "#e06a8a");
+      const ax = 40 + sw + 24, ar = ax + sw - 16;
+      this.drawWindow(ax, sy, sw, sh);
+      this.text(b.ally.name, ax + 24, sy + 34, { size: 20, bold: true, color: b.ally.ko ? "#e88" : "#ffe9a0" });
+      if (b.ally.ko) this.text("DOWN", ar, sy + 34, { size: 16, align: "right", color: "#e88" });
+      else this.text("LV " + (b.ally.lv || p.lv), ar, sy + 34, { size: 16, align: "right", color: "#cfd6ff" });
+      this.text("HP", ax + 24, sy + 66, { size: 15, color: "#bfe8c0" });
+      this.text(b.ally.hp + " / " + b.ally.maxhp, ar, sy + 66, { size: 15, align: "right", color: "#eef" });
+      this.bar(ax + 56, sy + 74, sw - 120, 9, Math.max(0, b.ally.hp / b.ally.maxhp), "#5cd06a");
       if ((b.ally.maxmp || 0) > 0) {
-        this.text("MP", 64, ay + 56, { size: 13, color: "#bcd0f0" });
-        this.text(b.ally.mp + " / " + b.ally.maxmp, sr, ay + 56, { size: 13, align: "right", color: "#eef" });
-        this.bar(96, ay + 62, sw - 120, 7, b.ally.mp / b.ally.maxmp, "#5aa6f0");
+        this.text("MP", ax + 24, sy + 104, { size: 15, color: "#bcd0f0" });
+        this.text(b.ally.mp + " / " + b.ally.maxmp, ar, sy + 104, { size: 15, align: "right", color: "#eef" });
+        this.bar(ax + 56, sy + 112, sw - 120, 9, b.ally.mp / b.ally.maxmp, "#5aa6f0");
       }
     }
 
     // --- bottom-right panel: command list / submenu (the rest are overlays) ---
     if (b.phase === "menu") {
-      const cw = 220, cx = W - cw - 40, rh = 22, cyy = H - 150;
-      this.drawWindow(cx, cyy, cw, 126);
+      const cw = 300, bh = 244, cx = W - cw - 40, rh = 34, cyy = H - bh - 24;
+      this.drawWindow(cx, cyy, cw, bh);
       const actorName = b.actor === "ally" ? (b.ally && b.ally.name) : this.player.name;
-      this.text(actorName + "'s turn", cx + 16, cyy + 20, { size: 13, color: "#9fb0e8" });
+      this.text(actorName + "'s turn", cx + 20, cyy + 30, { size: 15, color: "#9fb0e8" });
       b.cmds.forEach((c, i) => {
-        const yy = cyy + 44 + i * rh, sel = i === b.sel;
-        if (sel) this.cursor(cx + 22, yy - 6);
-        this.text(c, cx + 42, yy, { size: 17, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
+        const yy = cyy + 74 + i * rh, sel = i === b.sel;
+        if (sel) this.cursor(cx + 26, yy - 8);
+        this.text(c, cx + 52, yy, { size: 23, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
       });
     } else if (b.phase === "submenu") this.drawBattleSub();
     else if (b.phase === "victory") this.drawVictory();
@@ -537,24 +697,24 @@ Object.assign(Game.prototype, {
 
   drawBattleSub() {
     const W = this.cv.width, H = this.cv.height, b = this.battle, sub = b.sub;
-    const cw = 320, cx = W - cw - 40, cyy = H - 150;
+    const cw = 320, bh = 244, cx = W - cw - 40, rh = 30, cyy = H - bh - 24;
     const caster = b.actor === "ally" ? b.ally : this.player;
-    this.drawWindow(cx, cyy, cw, 126);
+    this.drawWindow(cx, cyy, cw, bh);
     this.text((sub.type === "skill" ? "SKILLS" : "ITEMS") + "  ·  " + caster.name,
-      cx + 20, cyy + 24, { size: 14, color: "#9fb0e8" });
+      cx + 20, cyy + 30, { size: 15, color: "#9fb0e8" });
     sub.list.forEach((entry, i) => {
-      const yy = cyy + 50 + i * 23, sel = i === sub.sel;
-      if (sel) this.cursor(cx + 22, yy - 6);
+      const yy = cyy + 70 + i * rh, sel = i === sub.sel;
+      if (sel) this.cursor(cx + 26, yy - 8);
       if (sub.type === "skill") {
         const sk = SKILL_BY_ID[entry], can = caster.mp >= sk.mp;
-        this.text(sk.name, cx + 42, yy, { size: 17, color: sel ? "#ffe9a0" : (can ? "#dfe4ff" : "#8890b0"), bold: sel });
-        this.text(sk.mp + " MP", cx + cw - 18, yy, { size: 14, align: "right", color: can ? "#9fd8ff" : "#8890b0" });
+        this.text(sk.name, cx + 52, yy, { size: 21, color: sel ? "#ffe9a0" : (can ? "#dfe4ff" : "#8890b0"), bold: sel });
+        this.text(sk.mp + " MP", cx + cw - 18, yy, { size: 16, align: "right", color: can ? "#9fd8ff" : "#8890b0" });
       } else {
-        this.text(entry.name, cx + 42, yy, { size: 17, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
-        this.text("x" + entry.qty, cx + cw - 18, yy, { size: 14, align: "right", color: "#cfd6ff" });
+        this.text(entry.name, cx + 52, yy, { size: 21, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
+        this.text("x" + entry.qty, cx + cw - 18, yy, { size: 16, align: "right", color: "#cfd6ff" });
       }
     });
-    this.text("ESC  back", cx + cw - 18, cyy + 118, { size: 13, align: "right", color: "rgba(220,228,255,.6)" });
+    this.text("ESC  back", cx + cw - 18, cyy + bh - 16, { size: 14, align: "right", color: "rgba(220,228,255,.6)" });
   },
 
   drawVictory() {
@@ -575,7 +735,8 @@ Object.assign(Game.prototype, {
   },
 
   drawLevelUp() {
-    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, r = this.battle.reward, t = this.battle.levelT;
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, b = this.battle, t = b.levelT;
+    const ups = b.levelups || [], r = ups[b.levelIdx] || { name: "", fromLv: 0, toLv: 0, gains: {}, newSkills: [] };
     const cx = W / 2, cy = H * 0.42, a = 0.28 + 0.18 * Math.sin(this.t / 140);
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 340);
     glow.addColorStop(0, `rgba(255,230,150,${a})`); glow.addColorStop(1, "rgba(255,210,80,0)");
@@ -585,23 +746,33 @@ Object.assign(Game.prototype, {
       const sy = cy + 160 - ((this.t / 6 + i * 50) % 320);
       ctx.fillStyle = `rgba(255,240,180,${0.6})`; ctx.fillRect(sx | 0, sy | 0, 3, 3);
     }
-    const bw = 440, bh = 308, bx = (W - bw) / 2, by = H * 0.18;
+    const bw = 440, bh = 330, bx = (W - bw) / 2, by = H * 0.16;
     this.drawWindow(bx, by, bw, bh);
     const pop = Math.min(1, t / 260);
-    ctx.save(); ctx.translate(W / 2, by + 56); ctx.scale(0.6 + 0.4 * pop, 0.6 + 0.4 * pop);
+    ctx.save(); ctx.translate(W / 2, by + 54); ctx.scale(0.6 + 0.4 * pop, 0.6 + 0.4 * pop);
     this.text("LEVEL  UP!", 0, 0, { align: "center", size: 40, bold: true, color: "#ffe9a0" });
     ctx.restore();
-    this.text("LV " + r.fromLv + "   →   " + r.toLv, W / 2, by + 96, { align: "center", size: 24, color: "#fff" });
+    this.text(r.name, W / 2, by + 92, { align: "center", size: 26, bold: true, color: "#fff3c8" });
+    this.text("LV " + r.fromLv + "   →   " + r.toLv, W / 2, by + 124, { align: "center", size: 22, color: "#fff" });
     const rows = [["Max HP", r.gains.hp], ["Max MP", r.gains.mp], ["Attack", r.gains.atk], ["Defense", r.gains.def]];
     rows.forEach(([k, v], i) => {
       if (t < 340 + i * 200) return;                  // cascade in
-      const yy = by + 140 + i * 30;
+      const yy = by + 166 + i * 30;
       this.text(k, bx + 64, yy, { size: 18, color: "#cfd6ff" });
       this.text("+ " + v, bx + bw - 64, yy, { align: "right", size: 18, color: "#9cf0a0" });
     });
     if (r.newSkills.length && t > 340 + 4 * 200)
-      this.text("Learned: " + r.newSkills.join(", "), W / 2, by + 270, { align: "center", size: 16, color: "#ffd479" });
-    this.text("Press ENTER", W / 2, by + bh - 14, { align: "center", size: 14, color: "rgba(230,235,255,.7)" });
+      this.text("Learned: " + r.newSkills.join(", "), W / 2, by + 296, { align: "center", size: 16, color: "#ffd479" });
+    // page dots when more than one character leveled
+    if (ups.length > 1) {
+      const dotY = by + bh - 34;
+      for (let i = 0; i < ups.length; i++) {
+        ctx.fillStyle = i === b.levelIdx ? "#ffe9a0" : "rgba(220,228,255,0.35)";
+        ctx.beginPath(); ctx.arc(W / 2 + (i - (ups.length - 1) / 2) * 20, dotY, 5, 0, 7); ctx.fill();
+      }
+    }
+    const more = ups.length > 1 && b.levelIdx < ups.length - 1;
+    this.text(more ? "Press ENTER  ▶" : "Press ENTER", W / 2, by + bh - 14, { align: "center", size: 14, color: "rgba(230,235,255,.7)" });
   },
 
   drawLose() {

@@ -285,7 +285,6 @@ Object.assign(Game.prototype, {
       const img = art[`${grp}_${fr}`];
       const w = cfg.ow.tiles;
       renderables.push({ sortY: e.y, draw: () => {
-        shadow(e.x, e.y, w * 0.8);
         this.drawSprite(img, e.x, e.y, w, false);
       }});
     }
@@ -300,22 +299,22 @@ Object.assign(Game.prototype, {
       }});
     }
     // party followers trail the hero along recent poses (walk-cycle animated)
+    const heroPixelH = p.wTiles * TILE * (art.idle.height / art.idle.width);   // Garran's on-screen height
     p.party.forEach((m, i) => {
       const pose = this.trail[Math.min(this.trail.length - 1, 14 * (i + 1))];
       if (!pose) return;
       const base = m.sprite || "ally_idle", stem = base.replace(/_idle$/, "");
       const img = pose.moving && art[`${stem}_walk_${pose.frame % 3}`]
         ? art[`${stem}_walk_${pose.frame % 3}`] : (art[base] || art.idle);
+      const wT = heroPixelH * img.width / (TILE * img.height);   // render her the same height as Garran
       renderables.push({ sortY: pose.y - 1, draw: () => {
-        shadow(pose.x, pose.y + 14, 0.7);
-        this.drawSprite(img, pose.x, pose.y + 14, 1.0, pose.face === 1);
+        this.drawSprite(img, pose.x, pose.y + 14, wT, pose.face === 1);
       }});
     });
     const pFrame = p.moving ? art["walk_" + p.frame] : art.idle;
     renderables.push({
       sortY: p.y,
       draw: () => {
-        shadow(p.x, p.y + 14, p.wTiles * 0.7);
         this.drawSprite(pFrame, p.x, p.y + 14, p.wTiles, p.face === 1);
       },
     });
@@ -565,7 +564,7 @@ Object.assign(Game.prototype, {
       const sk = SKILL_BY_ID[ui.drag.id];
       ctx.globalAlpha = 0.9; ctx.drawImage(art[sk.icon], ui.drag.mx - 28, ui.drag.my - 28, 56, 56); ctx.globalAlpha = 1;
     }
-    const tab = this.player.party.some(m => m.id === "ally") ? "TAB  switch character  ·  " : "";
+    const tab = this.player.party.some(m => m.id === "ally") ? "← →  switch character  ·  " : "";
     this.text(tab + "ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
@@ -704,7 +703,7 @@ Object.assign(Game.prototype, {
     }
 
     if (ui.drag) this.drawEquipIcon(ui.drag.mx - 28, ui.drag.my - 28, 56, EQUIP_BY_ID[ui.drag.id]);
-    const tab = this.player.party.some(m => m.id === "ally") ? "TAB  switch character  ·  " : "";
+    const tab = this.player.party.some(m => m.id === "ally") ? "← →  switch character  ·  " : "";
     this.text(tab + "ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
@@ -718,19 +717,12 @@ Object.assign(Game.prototype, {
       if (sel) this.cursor(cx + 20, y - 6);
       this.text(o, cx + 40, y, { size: 20, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
     });
-    // party member card (left)
+    // hero card (left)
     const px = 24, py = 24, pw = W - cw - 24 - px - 20, ph = 150;
     this.drawWindow(px, py, pw, ph);
     const portraitH = ph - 28;
     this.drawPortrait(px + 16, py + 14, portraitH);
-    let ix = px + 16 + portraitH * (this.art.portrait.width / this.art.portrait.height) + 18;
-    if (this.art.ally_portrait) {
-      const ally = this.art.ally_portrait;
-      const ah = portraitH * 0.72;
-      const aw = ah * (ally.width / ally.height);
-      this.ctx.drawImage(ally, ix, py + 14 + (portraitH - ah) / 2, aw, ah);
-      ix += aw + 18;
-    }
+    const ix = px + 16 + portraitH * (this.art.portrait.width / this.art.portrait.height) + 18;
     this.text(p.name, ix, py + 44, { size: 24, bold: true, color: "#ffe9a0" });
     this.text("LV " + p.lv + "  " + p.job, ix, py + 70, { size: 16, color: "#cfd6ff" });
     this.text("HP", ix, py + 100, { size: 15, color: "#bfe8c0" });
@@ -739,10 +731,35 @@ Object.assign(Game.prototype, {
     this.text("MP", ix, py + 128, { size: 15, color: "#bcd0f0" });
     this.text(p.mp + " / " + p.maxmp, ix + 150, py + 128, { size: 15, align: "right", color: "#eef" });
     this.bar(ix, py + 134, 150, 8, p.mp / p.maxmp, "#5aa6f0");
-    // gold + hint (bottom-left)
-    this.drawWindow(px, py + ph + 14, 220, 50);
-    this.text("Gold", px + 18, py + ph + 45, { size: 17, color: "#cfd6ff" });
-    this.text(p.gold + " GOLD", px + 202, py + ph + 45, { size: 17, align: "right", color: "#ffe9a0" });
+
+    // ally status blocks (one card per recruited party member, e.g. Elara)
+    let cardY = py + ph + 14;
+    const ch = 132;
+    p.party.forEach(m => {
+      this.drawWindow(px, cardY, pw, ch);
+      const cpH = ch - 28;
+      let mx = px + 16;
+      const por = this.art.ally_portrait || this.art[m.sprite];
+      if (por) {
+        const aw = cpH * (por.width / por.height);
+        this.ctx.drawImage(por, mx, cardY + 14, aw, cpH);
+        mx += aw + 18;
+      }
+      this.text(m.name, mx, cardY + 40, { size: 22, bold: true, color: "#ffe9a0" });
+      this.text("LV " + (m.lv || p.lv) + "  Contact", mx, cardY + 64, { size: 15, color: "#cfd6ff" });
+      this.text("HP", mx, cardY + 90, { size: 14, color: "#bfe8c0" });
+      this.text(m.hp + " / " + m.maxhp, mx + 150, cardY + 90, { size: 14, align: "right", color: "#eef" });
+      this.bar(mx, cardY + 96, 150, 7, m.hp / m.maxhp, "#5cd06a");
+      this.text("MP", mx, cardY + 118, { size: 14, color: "#bcd0f0" });
+      this.text(m.mp + " / " + m.maxmp, mx + 150, cardY + 118, { size: 14, align: "right", color: "#eef" });
+      this.bar(mx, cardY + 124, 150, 7, m.mp / Math.max(1, m.maxmp), "#5aa6f0");
+      cardY += ch + 14;
+    });
+
+    // gold + hint (bottom-left, below the cards)
+    this.drawWindow(px, cardY, 220, 50);
+    this.text("Gold", px + 18, cardY + 31, { size: 17, color: "#cfd6ff" });
+    this.text(p.gold + " GOLD", px + 202, cardY + 31, { size: 17, align: "right", color: "#ffe9a0" });
     this.text("↑↓ select   ENTER choose   ESC close", this.cv.width / 2, this.cv.height - 22,
       { align: "center", size: 14, color: "rgba(230,235,255,0.7)" });
   },
@@ -753,14 +770,7 @@ Object.assign(Game.prototype, {
     this.drawWindow(x, y, w, h);
     const ph = h - 90;
     this.drawPortrait(x + 30, y + 30, ph);
-    let colX = x + 30 + ph * (this.art.portrait.width / this.art.portrait.height) + 28;
-    if (this.art.ally_portrait) {
-      const ally = this.art.ally_portrait;
-      const ah = ph * 0.55;
-      const aw = ah * (ally.width / ally.height);
-      this.ctx.drawImage(ally, colX, y + 30 + (ph - ah) / 2, aw, ah);
-      colX += aw + 28;
-    }
+    const colX = x + 30 + ph * (this.art.portrait.width / this.art.portrait.height) + 28;
     this.text(p.name, colX, y + 56, { size: 30, bold: true, color: "#ffe9a0" });
     this.text(p.job + "   ·   Level " + p.lv, colX, y + 86, { size: 18, color: "#cfd6ff" });
 
@@ -945,15 +955,8 @@ Object.assign(Game.prototype, {
     const portraitH = bh - 56;
     const garranAR = this.art.portrait.width / this.art.portrait.height;
     this.drawPortrait(bx + 28, by + 28, portraitH);
-    let colX = bx + 28 + portraitH * garranAR + 24;
-    if (this.art.ally_portrait) {
-      const ally = this.art.ally_portrait;
-      const ah = portraitH * 0.72;
-      const aw = ah * (ally.width / ally.height);
-      ctx.drawImage(ally, colX, by + 28 + (portraitH - ah) / 2, aw, ah);
-      colX += aw + 24;
-    }
-    this.text("NAME THE WANDERER", colX, by + 56, { size: 24, bold: true, color: "#ffe9a0" });
+    const colX = bx + 28 + portraitH * garranAR + 24;
+    this.text("NAME THE WARRIOR", colX, by + 56, { size: 24, bold: true, color: "#ffe9a0" });
 
     // name field
     const fy = by + 92, fw = bw - (colX - bx) - 36;
