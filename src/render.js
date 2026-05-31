@@ -714,8 +714,9 @@ Object.assign(Game.prototype, {
     this.drawWindow(cx, cy, cw, 24 + MAIN_MENU.length * rh);
     MAIN_MENU.forEach((o, i) => {
       const y = cy + 34 + i * rh, sel = i === this.ui.sel;
+      const dis = o === "Save" && this.difficulty === "hardcore";   // permadeath: saving disabled
       if (sel) this.cursor(cx + 20, y - 6);
-      this.text(o, cx + 40, y, { size: 20, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
+      this.text(o, cx + 40, y, { size: 20, color: dis ? "rgba(150,150,165,0.5)" : (sel ? "#ffe9a0" : "#dfe4ff"), bold: sel && !dis });
     });
     // hero card (left)
     const px = 24, py = 24, pw = W - cw - 24 - px - 20, ph = 150;
@@ -1007,18 +1008,22 @@ Object.assign(Game.prototype, {
       let dw, dh;
       if (sar > ar) { dw = W; dh = W / ar; } else { dh = H; dw = H * ar; }
       ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
-      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+      // keep the art vivid: a light overall darken plus a heavier bottom vignette for UI legibility
+      ctx.fillStyle = "rgba(0,0,0,0.18)"; ctx.fillRect(0, 0, W, H);
+      const vg = ctx.createLinearGradient(0, H * 0.48, 0, H);
+      vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.74)");
+      ctx.fillStyle = vg; ctx.fillRect(0, H * 0.48, W, H * 0.52);
     }
 
-    // "<HERO> has fallen..."  — placed below the YOU DIED sign in the art
+    // small subtitle below the art's baked-in "YOU DIED" sign (no giant duplicate headline)
     const heroName = (p && p.name) || "THE HERO";
     const headline = heroName + " HAS FALLEN...";
-    const hy = H * 0.50;
+    const hy = H * 0.40;
     ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-    const big = Math.floor(H * 0.055);
+    const big = Math.floor(H * 0.034);
     ctx.font = `bold ${big}px Georgia, 'Times New Roman', serif`;
-    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillText(headline, W / 2 + 3, hy + 4);
-    ctx.lineWidth = Math.max(3, H * 0.008); ctx.strokeStyle = "#1a0606"; ctx.lineJoin = "round";
+    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillText(headline, W / 2 + 2, hy + 3);
+    ctx.lineWidth = Math.max(2, H * 0.006); ctx.strokeStyle = "#1a0606"; ctx.lineJoin = "round";
     ctx.strokeText(headline, W / 2, hy);
     const grad = ctx.createLinearGradient(0, hy - big, 0, hy + big * 0.2);
     grad.addColorStop(0, "#ffd0c0"); grad.addColorStop(0.5, "#d8341f"); grad.addColorStop(1, "#6a0a0a");

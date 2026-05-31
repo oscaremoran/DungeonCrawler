@@ -220,7 +220,11 @@ class Game {
         else if (pick === "Status") this.ui = { screen: "status", sel: 0 };
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
         else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
-        else if (pick === "Save") { this.saveGame(); this.ui = null; }
+        else if (pick === "Save") {
+          if (this.difficulty === "hardcore") this.flash = { text: "Hardcore — saving is disabled.", t: 1600 };
+          else this.saveGame();
+          this.ui = null;
+        }
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
     } else if (ui.screen === "items") {
@@ -436,7 +440,7 @@ class Game {
           const p = this.player;
           p.hp = p.maxhp; p.mp = p.maxmp;
           this.beginTransition("overworld");
-        } else { this.titleSel = 0; this.beginTransition("title"); }
+        } else { this.newGame(); this.titleSel = 0; this.beginTransition("title"); }
       }
     }
   }
@@ -458,6 +462,7 @@ class Game {
     this.writeSaves(this.listSaves().filter(s => s.id !== id));
   }
   saveGame(silent) {
+    if (this.difficulty === "hardcore") return;       // permadeath: no saves, ever (no save-scumming)
     const p = this.player;
     const dead = {};                                  // per-area defeated-enemy flags
     for (const id in this.areas) dead[id] = this.areas[id].enemies.map(e => !e.alive);
@@ -523,6 +528,10 @@ class Game {
     this.enemies = this.world.enemies;
     this.npcs = this.world.npcs || [];
     if (p.party.length) this.seedTrail();
+    // never resume onto a corpse: a save with missing/zero HP revives at full
+    if (!(p.maxhp > 0)) { p.maxhp = 30; p.atk = p.atk || 9; p.def = p.def || 5; }
+    if (!(p.maxmp >= 0)) p.maxmp = 8;
+    if (!(p.hp > 0)) { p.hp = p.maxhp; p.mp = p.maxmp > 0 ? p.maxmp : 8; }
     this.introShown = true;
     return true;
   }
@@ -702,7 +711,7 @@ class Game {
     this.encounter = null; this.dialogue = null; this.shop = null; this.encounterCD = 1200; this.bossTalkCD = 0;
     this.portalCD = 600;     // brief grace so we don't instantly re-trigger the door we arrived on
     if (this.player.party.length) this.seedTrail();
-    if (autosave) { this.saveGame(true); this.autosaveAnim = { t: 2000 }; }
+    if (autosave && this.difficulty !== "hardcore") { this.saveGame(true); this.autosaveAnim = { t: 2000 }; }
   }
 
   /* roar -> whirl -> battle */
