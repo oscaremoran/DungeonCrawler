@@ -54,6 +54,7 @@ Object.assign(Game.prototype, {
   },
 
   render() {
+    if (this.state === "cheater") { this.renderCheater(); return; }
     if (this.state === "title") this.renderTitle();
     else if (this.state === "difficulty") this.renderDifficulty();
     else if (this.state === "name") this.renderName();
@@ -71,6 +72,26 @@ Object.assign(Game.prototype, {
       ctx.fillStyle = `rgba(0,0,0,${this.fade})`;
       ctx.fillRect(0, 0, this.cv.width, this.cv.height);
     }
+  },
+
+  /* anti-cheat: shown after tampering is detected; saves are already wiped */
+  renderCheater() {
+    const ctx = this.ctx, W = this.cv.width, H = this.cv.height, t = this.t / 1000;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(t * 4));
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const big = Math.floor(H * 0.13);
+    ctx.font = `bold ${big}px Georgia, 'Times New Roman', serif`;
+    ctx.lineJoin = "round"; ctx.lineWidth = Math.max(4, H * 0.012);
+    ctx.strokeStyle = "#1a0000"; ctx.strokeText("DON'T CHEAT", W / 2, H / 2);
+    ctx.fillStyle = `rgba(${220 + (35 * pulse) | 0}, 20, 20, 1)`;
+    ctx.shadowColor = "rgba(255,0,0,0.8)"; ctx.shadowBlur = 30 * pulse;
+    ctx.fillText("DON'T CHEAT", W / 2, H / 2);
+    ctx.shadowBlur = 0;
+    ctx.font = `${Math.floor(H * 0.03)}px Georgia, serif`;
+    ctx.fillStyle = "rgba(220,170,170,0.85)";
+    ctx.fillText("Your saves have been erased.", W / 2, H / 2 + big * 0.7);
+    ctx.textBaseline = "alphabetic";
   },
 
   /* ----------------------------- title screen ---------------------------- */

@@ -5,6 +5,10 @@ class Game {
 
     this.newGame();             // build the world + a fresh hero (re-run by New Game)
 
+    // anti-cheat: disabled for the ?dev test harnesses, active for real play
+    this.devMode = /(?:[?&#])dev\b/i.test(location.search + location.hash);
+    this.cheated = false;
+
     // --- screen / flow state ---
     this.state = "title";       // title | difficulty | name | overworld
     this.t = 0;                 // running clock (ms), for animation
@@ -110,7 +114,7 @@ class Game {
 
   /* discrete key presses, routed by screen */
   onKey(key) {
-    if (this.exiting) return;
+    if (this.cheated || this.exiting) return;
     if (this.state === "title") {
       if (key === "arrowup" || key === "w" || key === "arrowdown" || key === "s")
         this.titleSel ^= 1;                       // toggle the two options
@@ -412,6 +416,36 @@ class Game {
     this.runId = "r_" + Date.now() + "_" + Math.floor(Math.random() * 1e6).toString(36);
   }
 
+  /* --------------------------- anti-cheat tripwire ---------------------------
+   * The hero's base stats are fully determined by level, so any console/save
+   * tampering leaves an impossible state we can spot with no false positives. */
+  expectedBase(lv) {
+    return { maxhp: 30 + 6 * (lv - 1), maxmp: 8 + 2 * (lv - 1), atk: 9 + 2 * (lv - 1), def: 5 + 1 * (lv - 1) };
+  }
+  checkIntegrity() {
+    if (this.cheated) return;
+    const p = this.player; if (!p) return;
+    const L = p.lv;
+    let bad = !Number.isFinite(L) || L < 1 || L > 200;
+    if (!bad) {
+      const e = this.expectedBase(L);
+      if (p.maxhp !== e.maxhp || p.maxmp !== e.maxmp || p.atk !== e.atk || p.def !== e.def) bad = true;
+      else if (p.hp > p.maxhp || p.mp > p.maxmp || p.hp < 0 || p.mp < 0) bad = true;
+      else if (!Number.isFinite(p.gold) || p.gold < 0 || p.gold > 9000000) bad = true;
+    }
+    if (bad) this.cheatDetected();
+  }
+  /* nuke every save and freeze on the DON'T CHEAT screen */
+  cheatDetected() {
+    if (this.cheated) return;
+    this.cheated = true;
+    try { localStorage.clear(); } catch (e) {}
+    this.state = "cheater"; this.fade = 0;
+    this.battle = this.encounter = this.transition = null;
+    this.ui = this.shop = this.dialogue = this.prompt = this.naming = null;
+    if (this.hud) this.hud.style.display = "none";
+  }
+
   /* enter the You Died screen — called from endBattle on a loss */
   beginGameOver() {
     const hardcore = this.difficulty === "hardcore";
@@ -528,10 +562,14 @@ class Game {
     this.enemies = this.world.enemies;
     this.npcs = this.world.npcs || [];
     if (p.party.length) this.seedTrail();
-    // never resume onto a corpse: a save with missing/zero HP revives at full
-    if (!(p.maxhp > 0)) { p.maxhp = 30; p.atk = p.atk || 9; p.def = p.def || 5; }
-    if (!(p.maxmp >= 0)) p.maxmp = 8;
-    if (!(p.hp > 0)) { p.hp = p.maxhp; p.mp = p.maxmp > 0 ? p.maxmp : 8; }
+    // never resume onto a corpse: repair a missing/zero stat block to the level's
+    // formula values (keeps it consistent with the anti-cheat integrity check)
+    const eb = this.expectedBase(Number.isFinite(p.lv) && p.lv >= 1 ? p.lv : (p.lv = 1));
+    if (!(p.maxhp > 0)) p.maxhp = eb.maxhp;
+    if (!(p.maxmp >= 0)) p.maxmp = eb.maxmp;
+    if (!(p.atk > 0)) p.atk = eb.atk;
+    if (!(p.def > 0)) p.def = eb.def;
+    if (!(p.hp > 0)) { p.hp = p.maxhp; p.mp = p.maxmp; }
     this.introShown = true;
     return true;
   }
@@ -555,6 +593,9 @@ class Game {
 
   update(dt) {
     this.t += dt;
+
+    if (this.cheated) return;                         // frozen on the DON'T CHEAT screen
+    if (!this.devMode) this.checkIntegrity();         // catch tampered hero state
 
     // area-to-area transition: fade to black, swap rooms, fade back in
     if (this.transition) {
