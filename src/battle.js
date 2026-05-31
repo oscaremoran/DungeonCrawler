@@ -6,13 +6,28 @@ Object.assign(Game.prototype, {
     this.state = "battle"; this.fade = 0;
     const cfg = ENEMY_TYPES[target.type];
     const am = this.player.party.find(m => m.id === "ally");   // Elara fights alongside the hero
+    const m = { casual: 0.45, normal: 1, hard: 1.30, hardcore: 1.55 }[this.difficulty] ?? 1;
+    const eHp = Math.max(1, Math.round(cfg.hp * m));
+    const eAtk = Math.max(1, Math.round(cfg.atk * m));
     this.battle = {
       target, cfg,
-      enemy: { name: cfg.name, hp: cfg.hp, maxhp: cfg.hp, atk: cfg.atk, def: cfg.def, hurtT: 0, dead: false, deathT: 0 },
-      ally: am ? { name: am.name, sprite: am.sprite, hp: am.maxhp, maxhp: am.maxhp, atk: am.atk, def: am.def, hurtT: 0, ko: false, lunge: 0 } : null,
+      enemy: { name: cfg.name, hp: eHp, maxhp: eHp, atk: eAtk, def: cfg.def, hurtT: 0, dead: false, deathT: 0 },
+      ally: am ? {
+        name: am.name, sprite: am.sprite,
+        // pull in her current pools and equip bonuses so battle reads everything off `b.ally`
+        hp: am.hp ?? am.maxhp, maxhp: am.maxhp,
+        mp: am.mp ?? (am.maxmp ?? 0), maxmp: am.maxmp ?? 0,
+        atk: this.atkTotalFor(am), def: this.defTotalFor(am),
+        skills: Array.isArray(am.skills) ? am.skills.slice() : [],
+        hurtT: 0, ko: false, lunge: 0,
+      } : null,
+      heroCmds: ["Attack", "Skill", "Defend", "Item", "Run"],
+      allyCmds: ["Attack", "Skill", "Defend", "Item"],
+      actor: "hero",
       cmds: ["Attack", "Skill", "Defend", "Item", "Run"], sel: 0,
       phase: "intro", step: "", timer: 1100, msg: cfg.intro,
-      heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0, defending: false, shieldBuff: false,
+      heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0,
+      defending: false, allyDefending: false, shieldBuff: false, allyShieldBuff: false,
       floats: [], animT: 0, fx: null, sub: null,
     };
   },
@@ -45,25 +60,41 @@ Object.assign(Game.prototype, {
   enemyDies() {
     const b = this.battle;
     b.phase = "enemy_die"; b.timer = 1300; b.enemy.dead = true; b.enemy.deathT = 0;
+    this.stats.kills++;
     this.battleMsg("The " + b.enemy.name + " collapses!");
   },
   afterHeroAction() {
     const b = this.battle;
     if (b.enemy.hp <= 0) return this.enemyDies();
-    if (b.ally && !b.ally.ko) { b.phase = "ally_pre"; b.timer = 460; return; }  // Elara's turn
+    if (b.ally && !b.ally.ko) {                       // Elara now picks her own action
+      b.actor = "ally"; b.cmds = b.allyCmds.slice();
+      b.sel = 0; b.phase = "menu"; b.msg = "";
+      b.allyDefending = false;
+      return;
+    }
+    b.actor = "hero";
     b.phase = "enemy_pre"; b.timer = 600;
   },
   afterAllyAction() {
     const b = this.battle;
     if (b.enemy.hp <= 0) return this.enemyDies();
+    b.actor = "hero";
     b.phase = "enemy_pre"; b.timer = 600;
   },
   endBattle(result) {
     const tgt = this.battle && this.battle.target;
+    // persist Elara's hp/mp back to the party member before tearing down the battle state
+    if (this.battle && this.battle.ally) {
+      const am = this.player.party.find(m => m.id === "ally");
+      if (am) {
+        am.hp = Math.max(0, this.battle.ally.hp);
+        if (typeof am.maxmp === "number") am.mp = Math.max(0, this.battle.ally.mp);
+        if (am.hp <= 0) am.hp = 1;                    // revive at 1 HP if she fell during battle
+      }
+    }
     this.battle = null; this.encounterCD = 1700;
-    if (result === "lose") {                          // game over -> revive, back to title
-      this.player.hp = this.player.maxhp; this.player.y = this.world.spawn.ty * TILE;
-      this.introShown = true; this.beginTransition("title");
+    if (result === "lose") {                          // -> You Died screen with run stats
+      this.beginGameOver();
       return;
     }
     if (result === "win" && tgt) {
@@ -122,11 +153,27 @@ Object.assign(Game.prototype, {
   },
 
   chooseCommand(cmd) {
-    const b = this.battle; b.defending = false;
-    if (cmd === "Attack") { b.phase = "hero_attack"; b.step = "lunge"; b.timer = 260; b.heroLunge = 0; }
-    else if (cmd === "Defend") { b.defending = true; this.battleMsg(this.player.name + " takes a guarded stance."); b.phase = "enemy_pre"; b.timer = 650; }
+    const b = this.battle;
+    const ally = b.actor === "ally";
+    if (ally) b.allyDefending = false; else b.defending = false;
+    if (cmd === "Attack") {
+      if (ally) { b.phase = "ally_attack"; b.step = "lunge"; b.timer = 260; b.allyLunge = 0; }
+      else { b.phase = "hero_attack"; b.step = "lunge"; b.timer = 260; b.heroLunge = 0; }
+    }
+    else if (cmd === "Defend") {
+      if (ally) {
+        b.allyDefending = true;
+        this.battleMsg(b.ally.name + " takes a guarded stance.");
+        this.afterAllyAction();
+      } else {
+        b.defending = true;
+        this.battleMsg(this.player.name + " takes a guarded stance.");
+        this.afterHeroAction();
+      }
+    }
     else if (cmd === "Skill") {
-      const eq = this.player.skills.filter(Boolean);
+      const src = ally ? b.ally.skills : this.player.skills;
+      const eq = (src || []).filter(Boolean);
       if (!eq.length) { this.battleMsg("No skills equipped! (set them in Skills)"); return; }
       b.phase = "submenu"; b.sub = { type: "skill", sel: 0, list: eq };
     }
@@ -143,31 +190,49 @@ Object.assign(Game.prototype, {
 
   confirmSub() {
     const b = this.battle, p = this.player;
+    const ally = b.actor === "ally";
+    const after = () => ally ? this.afterAllyAction() : this.afterHeroAction();
+
     if (b.sub.type === "item") {
       const it = b.sub.list[b.sub.sel];
       const amt = it.name === "Potion" ? 25 : 8;
-      it.qty--; const heal = Math.min(amt, p.maxhp - p.hp); p.hp += heal;
-      this.addFloat("hero", "+" + heal, "#9cf0a0");
-      this.battleMsg(p.name + " uses " + it.name + ". +" + heal + " HP");
-      b.sub = null; b.phase = "enemy_pre"; b.timer = 700;
+      it.qty--;
+      if (ally) {
+        const heal = Math.min(amt, b.ally.maxhp - b.ally.hp); b.ally.hp += heal;
+        this.addFloat("ally", "+" + heal, "#9cf0a0");
+        this.battleMsg(b.ally.name + " uses " + it.name + ". +" + heal + " HP");
+      } else {
+        const heal = Math.min(amt, p.maxhp - p.hp); p.hp += heal;
+        this.addFloat("hero", "+" + heal, "#9cf0a0");
+        this.battleMsg(p.name + " uses " + it.name + ". +" + heal + " HP");
+      }
+      b.sub = null;
+      after();
       return;
     }
     // skill
     const sk = SKILL_BY_ID[b.sub.list[b.sub.sel]];
-    if (p.mp < sk.mp) { this.battleMsg("Not enough MP for " + sk.name + "!"); return; }
-    p.mp -= sk.mp; b.sub = null; b.skill = sk;
+    const caster = ally ? b.ally : p;
+    if (caster.mp < sk.mp) { this.battleMsg("Not enough MP for " + sk.name + "!"); return; }
+    caster.mp -= sk.mp; b.sub = null; b.skill = sk;
+    this.stats.skillUses[sk.id] = (this.stats.skillUses[sk.id] || 0) + 1;
     if (sk.kind === "heal") {
-      const heal = Math.min(sk.power, p.maxhp - p.hp); p.hp += heal;
-      this.addFloat("hero", "+" + heal, "#9cf0a0");
-      this.battleMsg(p.name + " casts Healing. +" + heal + " HP");
-      b.phase = "enemy_pre"; b.timer = 750;
+      const heal = Math.min(sk.power, caster.maxhp - caster.hp); caster.hp += heal;
+      this.addFloat(ally ? "ally" : "hero", "+" + heal, "#9cf0a0");
+      this.battleMsg(caster.name + " casts Healing. +" + heal + " HP");
+      after();
     } else if (sk.kind === "shield") {
-      b.shieldBuff = true; this.battleMsg(p.name + " raises the Blue Shield!");
-      b.phase = "enemy_pre"; b.timer = 750;
+      if (ally) { b.allyShieldBuff = true; } else { b.shieldBuff = true; }
+      this.battleMsg(caster.name + " raises the Blue Shield!");
+      after();
     } else { // fire / bolt damage skill
-      b.phase = "hero_skill"; b.step = "cast"; b.timer = 520; b.heroLunge = 0;
+      if (ally) {
+        b.phase = "ally_skill"; b.step = "cast"; b.timer = 520; b.allyLunge = 0;
+      } else {
+        b.phase = "hero_skill"; b.step = "cast"; b.timer = 520; b.heroLunge = 0;
+      }
       b.fx = { kind: sk.kind, t: 0 };
-      this.battleMsg(p.name + " unleashes " + sk.name + "!");
+      this.battleMsg(caster.name + " unleashes " + sk.name + "!");
     }
   },
 
@@ -190,6 +255,7 @@ Object.assign(Game.prototype, {
           if (b.timer <= 0) {
             const dmg = this.calcDmg(this.atkTotal(), b.enemy.def);
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
+            this.stats.dmgDealt += dmg;
             this.addFloat("enemy", dmg, "#ffffff");
             this.battleMsg(this.player.name + " strikes for " + dmg + "!");
             b.step = "return"; b.timer = 420;
@@ -206,6 +272,7 @@ Object.assign(Game.prototype, {
             const base = this.atkTotal() * sk.power + (sk.kind === "bolt" ? 10 : 6);
             const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
+            this.stats.dmgDealt += dmg;
             this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
             this.battleMsg(sk.name + " hits for " + dmg + "!");
             b.step = "impact"; b.timer = 520;
@@ -221,6 +288,7 @@ Object.assign(Game.prototype, {
           if (b.timer <= 0) {
             const dmg = this.calcDmg(b.ally.atk, b.enemy.def);
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
+            this.stats.dmgDealt += dmg;
             this.addFloat("enemy", dmg, "#ffd0a0");
             this.battleMsg(b.ally.name + " hits for " + dmg + "!");
             b.step = "return"; b.timer = 380;
@@ -229,6 +297,20 @@ Object.assign(Game.prototype, {
           b.allyLunge = Math.max(0, b.timer / 380);
           if (b.timer <= 0) this.afterAllyAction();
         }
+        break;
+      case "ally_skill":
+        if (b.step === "cast") {
+          if (b.timer <= 0) {
+            const sk = b.skill;
+            const base = b.ally.atk * sk.power + (sk.kind === "bolt" ? 10 : 6);
+            const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
+            b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
+            this.stats.dmgDealt += dmg;
+            this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
+            this.battleMsg(sk.name + " hits for " + dmg + "!");
+            b.step = "impact"; b.timer = 520;
+          }
+        } else if (b.timer <= 0) { b.fx = null; this.afterAllyAction(); }
         break;
       case "enemy_pre":
         if (b.timer <= 0) { b.phase = "enemy_attack"; b.step = "lunge"; b.timer = 300; b.eLunge = 0; this.battleMsg("The " + b.enemy.name + " attacks!"); }
@@ -240,7 +322,10 @@ Object.assign(Game.prototype, {
             // the enemy sometimes lunges at Elara instead of the hero
             const atAlly = b.ally && !b.ally.ko && Math.random() < 0.4;
             if (atAlly) {
-              const dmg = this.calcDmg(b.enemy.atk, b.ally.def);
+              let dmg = this.calcDmg(b.enemy.atk, b.ally.def);
+              if (b.allyShieldBuff) dmg = Math.max(1, Math.floor(dmg * 0.3));
+              else if (b.allyDefending) dmg = Math.max(1, Math.floor(dmg / 2));
+              b.allyShieldBuff = false;
               b.ally.hp = Math.max(0, b.ally.hp - dmg); b.ally.hurtT = 400;
               this.addFloat("ally", dmg, "#ff8a8a");
               if (b.ally.hp <= 0) { b.ally.ko = true; this.battleMsg(b.ally.name + " is knocked out!"); }
@@ -259,8 +344,14 @@ Object.assign(Game.prototype, {
         } else {
           b.eLunge = Math.max(0, b.timer / 420);
           if (b.timer <= 0) {
-            if (this.player.hp <= 0) { b.phase = "lose"; b.msg = this.player.name + " has fallen...  (ENTER)"; }
-            else { b.phase = "menu"; b.msg = ""; }
+            if (this.player.hp <= 0) {
+              this.stats.lastKiller = b.enemy.name;
+              b.phase = "lose"; b.msg = this.player.name + " has fallen...  (ENTER)";
+            }
+            else {
+              b.actor = "hero"; b.cmds = b.heroCmds.slice();
+              b.sel = 0; b.phase = "menu"; b.msg = "";
+            }
           }
         }
         break;
@@ -414,20 +505,27 @@ Object.assign(Game.prototype, {
 
     // --- Elara status (a compact bar just above the hero's panel) ---
     if (b.ally) {
-      const ay = sy - 64, ah = 56;
+      const ay = sy - 86, ah = 78;
       this.drawWindow(40, ay, sw, ah);
-      this.text(b.ally.name, 64, ay + 26, { size: 17, bold: true, color: b.ally.ko ? "#a08" : "#ffd0e0" });
-      if (b.ally.ko) this.text("DOWN", sr, ay + 26, { size: 14, align: "right", color: "#e88" });
-      else this.text(b.ally.hp + " / " + b.ally.maxhp, sr, ay + 26, { size: 14, align: "right", color: "#eef" });
-      this.bar(64, ay + 34, sw - 48, 8, Math.max(0, b.ally.hp / b.ally.maxhp), "#e06a8a");
+      this.text(b.ally.name, 64, ay + 24, { size: 17, bold: true, color: b.ally.ko ? "#a08" : "#ffd0e0" });
+      if (b.ally.ko) this.text("DOWN", sr, ay + 24, { size: 14, align: "right", color: "#e88" });
+      else this.text(b.ally.hp + " / " + b.ally.maxhp, sr, ay + 24, { size: 14, align: "right", color: "#eef" });
+      this.bar(64, ay + 30, sw - 48, 7, Math.max(0, b.ally.hp / b.ally.maxhp), "#e06a8a");
+      if ((b.ally.maxmp || 0) > 0) {
+        this.text("MP", 64, ay + 56, { size: 13, color: "#bcd0f0" });
+        this.text(b.ally.mp + " / " + b.ally.maxmp, sr, ay + 56, { size: 13, align: "right", color: "#eef" });
+        this.bar(96, ay + 62, sw - 120, 7, b.ally.mp / b.ally.maxmp, "#5aa6f0");
+      }
     }
 
     // --- bottom-right panel: command list / submenu (the rest are overlays) ---
     if (b.phase === "menu") {
       const cw = 220, cx = W - cw - 40, rh = 22, cyy = H - 150;
       this.drawWindow(cx, cyy, cw, 126);
+      const actorName = b.actor === "ally" ? (b.ally && b.ally.name) : this.player.name;
+      this.text(actorName + "'s turn", cx + 16, cyy + 20, { size: 13, color: "#9fb0e8" });
       b.cmds.forEach((c, i) => {
-        const yy = cyy + 30 + i * rh, sel = i === b.sel;
+        const yy = cyy + 44 + i * rh, sel = i === b.sel;
         if (sel) this.cursor(cx + 22, yy - 6);
         this.text(c, cx + 42, yy, { size: 17, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
       });
@@ -440,13 +538,15 @@ Object.assign(Game.prototype, {
   drawBattleSub() {
     const W = this.cv.width, H = this.cv.height, b = this.battle, sub = b.sub;
     const cw = 320, cx = W - cw - 40, cyy = H - 150;
+    const caster = b.actor === "ally" ? b.ally : this.player;
     this.drawWindow(cx, cyy, cw, 126);
-    this.text(sub.type === "skill" ? "SKILLS" : "ITEMS", cx + 20, cyy + 24, { size: 14, color: "#9fb0e8" });
+    this.text((sub.type === "skill" ? "SKILLS" : "ITEMS") + "  ·  " + caster.name,
+      cx + 20, cyy + 24, { size: 14, color: "#9fb0e8" });
     sub.list.forEach((entry, i) => {
       const yy = cyy + 50 + i * 23, sel = i === sub.sel;
       if (sel) this.cursor(cx + 22, yy - 6);
       if (sub.type === "skill") {
-        const sk = SKILL_BY_ID[entry], can = this.player.mp >= sk.mp;
+        const sk = SKILL_BY_ID[entry], can = caster.mp >= sk.mp;
         this.text(sk.name, cx + 42, yy, { size: 17, color: sel ? "#ffe9a0" : (can ? "#dfe4ff" : "#8890b0"), bold: sel });
         this.text(sk.mp + " MP", cx + cw - 18, yy, { size: 14, align: "right", color: can ? "#9fd8ff" : "#8890b0" });
       } else {

@@ -59,8 +59,16 @@ class Game {
     this.nameBuf = "GARRAN"; // name-entry buffer
     this.bossTalkCD = 0;
 
+    // --- difficulty (set on New Game; casual|normal|hard|hardcore) ---
+    this.difficulty = "normal";
+    this.difficultySel = 1;     // 0 Casual, 1 Normal, 2 Hard, 3 Hardcore
+
+    // --- per-run stats, surfaced on the You Died screen ---
+    this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null };
+    this.gameover = null;       // null | { sel: 0|1 }  (Continue / Home)
+
     // --- screen / flow state ---
-    this.state = "title";       // title | overworld
+    this.state = "title";       // title | difficulty | name | overworld
     this.t = 0;                 // running clock (ms), for animation
     this.titleSel = 0;          // 0 = New Game, 1 = Continue
     this.fade = 1;              // 1 = black; fades in on load
@@ -70,7 +78,7 @@ class Game {
     this.keys = {};
     addEventListener("keydown", e => {
       const key = e.key.toLowerCase();
-      if (["arrowup","arrowdown","arrowleft","arrowright"," ","enter","backspace"].includes(key))
+      if (["arrowup","arrowdown","arrowleft","arrowright"," ","enter","backspace","tab"].includes(key))
         e.preventDefault();
       if (!e.repeat) this.onKey(key);     // discrete (menu) actions
       this.keys[key] = true;              // continuous (movement) state
@@ -98,10 +106,42 @@ class Game {
       if (key === "arrowup" || key === "w" || key === "arrowdown" || key === "s")
         this.titleSel ^= 1;                       // toggle the two options
       else if (key === "enter" || key === " ") {
-        if (this.titleSel === 1) {                  // Continue
-          if (this.loadGame()) this.beginTransition("overworld");
+        if (this.titleSel === 1) {                  // Continue -> save-picker
+          if (this.hasSave()) { this.saveSel = 0; this.beginTransition("saveselect"); }
           else this.flash = { text: "No saved game found.", t: 1500 };
-        } else this.beginTransition("name");        // New Game -> choose a name
+        } else { this.resetRunStats(); this.beginTransition("difficulty"); } // New Game -> pick difficulty
+      }
+      return;
+    }
+    if (this.state === "difficulty") {
+      const N = 4;
+      if (key === "arrowleft" || key === "a" || key === "arrowup" || key === "w")
+        this.difficultySel = (this.difficultySel + N - 1) % N;
+      else if (key === "arrowright" || key === "d" || key === "arrowdown" || key === "s")
+        this.difficultySel = (this.difficultySel + 1) % N;
+      else if (key === "escape") this.beginTransition("title");
+      else if (key === "enter" || key === " ") {
+        this.difficulty = ["casual", "normal", "hard", "hardcore"][this.difficultySel];
+        this.beginTransition("name");
+      }
+      return;
+    }
+    if (this.state === "saveselect") {
+      const list = this.listSaves(); const n = list.length;
+      if (!n) { this.beginTransition("title"); return; }
+      this.saveSel = Math.min(this.saveSel || 0, n - 1);
+      if (key === "arrowup" || key === "w") this.saveSel = (this.saveSel + n - 1) % n;
+      else if (key === "arrowdown" || key === "s") this.saveSel = (this.saveSel + 1) % n;
+      else if (key === "escape") this.beginTransition("title");
+      else if (key === "delete" || key === "backspace") {
+        this.deleteSave(list[this.saveSel].id);
+        const remaining = this.listSaves();
+        if (!remaining.length) this.beginTransition("title");
+        else this.saveSel = Math.min(this.saveSel, remaining.length - 1);
+      }
+      else if (key === "enter" || key === " ") {
+        if (this.loadGame(list[this.saveSel].id)) this.beginTransition("overworld");
+        else this.flash = { text: "Save load failed.", t: 1500 };
       }
       return;
     }
@@ -118,6 +158,7 @@ class Game {
       return;
     }
     if (this.state === "battle") { this.battleKey(key); return; }
+    if (this.state === "gameover") { this.gameoverKey(key); return; }
     if (this.state === "overworld") {
       if (this.encounter) return;                 // locked during roar/whirl
       if (this.naming) { this.namingKey(key); return; }  // mid-game name-entry box
@@ -149,6 +190,14 @@ class Game {
     const ui = this.ui;
     const back = () => { ui.screen === "main" ? (this.ui = null) : (this.ui = { screen: "main", sel: 0 }); };
     if (key === "escape") return back();
+    // Tab toggles the active character on the Skills/Equip screens (if an ally is recruited).
+    if (key === "tab" && (ui.screen === "skills" || ui.screen === "equip")) {
+      if (this.player.party.some(m => m.id === "ally")) {
+        ui.target = ui.target === "ally" ? "hero" : "ally";
+        ui.drag = null; ui.hover = ui.screen === "skills" ? -1 : null;
+      }
+      return;
+    }
 
     if (ui.screen === "main") {
       const n = MAIN_MENU.length;
@@ -158,8 +207,8 @@ class Game {
         const pick = MAIN_MENU[ui.sel];
         if (pick === "Items") this.ui = { screen: "items", sel: 0 };
         else if (pick === "Status") this.ui = { screen: "status", sel: 0 };
-        else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1 };
-        else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null };
+        else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
+        else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
         else if (pick === "Save") { this.saveGame(); this.ui = null; }
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
@@ -233,9 +282,14 @@ class Game {
     const p = this.player;
     if (this.hasAlly(n)) return;
     const nm = (name || n.name).toUpperCase();
+    const lv = p.lv;
     p.party.push({
       id: "ally", name: nm, sprite: n.sprite,
-      maxhp: 28 + p.lv * 4, hp: 28 + p.lv * 4, atk: 7 + p.lv, def: 3 + ((p.lv / 2) | 0),
+      maxhp: 28 + lv * 4, hp: 28 + lv * 4,
+      maxmp: 6 + lv * 2, mp: 6 + lv * 2,
+      atk: 7 + lv, def: 3 + ((lv / 2) | 0),
+      skills: [],                                  // her equipped skill slots (shared catalog)
+      equip: { weapon: null, armor: null },        // her worn gear (shared catalog)
     });
     this.npcs = this.npcs.filter(x => x !== n);
     if (this.world.npcs) this.world.npcs = this.world.npcs.filter(x => x !== n);
@@ -337,28 +391,90 @@ class Game {
 
   beginTransition(to) { this.exiting = true; this.exitTo = to; }
 
-  /* ------------------------------ save / load ---------------------------- */
-  hasSave() { try { return !!localStorage.getItem("game_save"); } catch (e) { return false; } }
+  resetRunStats() {
+    this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null };
+    this.runId = "r_" + Date.now() + "_" + Math.floor(Math.random() * 1e6).toString(36);
+  }
+
+  /* enter the You Died screen — called from endBattle on a loss */
+  beginGameOver() {
+    const hardcore = this.difficulty === "hardcore";
+    if (hardcore && this.runId) {                // permadeath: wipe this run's saves
+      this.writeSaves(this.listSaves().filter(s => s.runId !== this.runId));
+    }
+    this.gameover = { sel: hardcore ? 1 : 0 };   // hardcore can only pick Home
+    this.state = "gameover"; this.fade = 0;
+    this.battle = null; this.encounter = null;
+  }
+
+  gameoverKey(key) {
+    const g = this.gameover; if (!g) return;
+    const hardcore = this.difficulty === "hardcore";
+    if (key === "arrowleft" || key === "a" || key === "arrowright" || key === "d") {
+      if (!hardcore) g.sel ^= 1;                 // toggle Continue / Home
+    } else if (key === "enter" || key === " ") {
+      const pickHome = hardcore || g.sel === 1;
+      this.gameover = null;
+      if (pickHome) {
+        this.titleSel = 0;
+        this.beginTransition("title");
+      } else {
+        // Continue from death: load most recent save and revive at full HP/MP
+        if (this.loadGame()) {
+          const p = this.player;
+          p.hp = p.maxhp; p.mp = p.maxmp;
+          this.beginTransition("overworld");
+        } else { this.titleSel = 0; this.beginTransition("title"); }
+      }
+    }
+  }
+
+  /* ------------------------------ save / load ----------------------------
+   * Saves live in a list under localStorage key "game_saves_v1".
+   * Each entry has its own id + timestamp; a new entry is pushed every
+   * time the player saves (manual or autosave). Cap = SAVE_CAP. */
+  listSaves() {
+    try { return JSON.parse(localStorage.getItem("game_saves_v1")) || []; }
+    catch (e) { return []; }
+  }
+  writeSaves(list) {
+    try { localStorage.setItem("game_saves_v1", JSON.stringify(list.slice(0, 30))); }
+    catch (e) {}
+  }
+  hasSave() { return this.listSaves().length > 0; }
+  deleteSave(id) {
+    this.writeSaves(this.listSaves().filter(s => s.id !== id));
+  }
   saveGame(silent) {
     const p = this.player;
     const dead = {};                                  // per-area defeated-enemy flags
     for (const id in this.areas) dead[id] = this.areas[id].enemies.map(e => !e.alive);
+    const now = Date.now();
     const data = {
-      v: 2, name: p.name, lv: p.lv, exp: p.exp, expNext: p.expNext,
+      id: "s_" + now + "_" + Math.floor(Math.random() * 1e6).toString(36),
+      runId: this.runId || null,
+      v: 3, name: p.name, lv: p.lv, exp: p.exp, expNext: p.expNext,
       hp: p.hp, maxhp: p.maxhp, mp: p.mp, maxmp: p.maxmp, atk: p.atk, def: p.def,
       gold: p.gold, skills: p.skills.slice(), boughtSkills: p.boughtSkills.slice(),
       party: p.party.map(m => ({ ...m })),
       equipOwned: p.equipOwned.slice(), equip: { ...p.equip },
       chestOpened: !!(this.areas.forest.chest && this.areas.forest.chest.opened),
       items: this.items.map(i => ({ name: i.name, qty: i.qty })),
-      area: this.area, dead,
-      px: p.x, py: p.y, at: Date.now(),
+      area: this.area, dead, difficulty: this.difficulty,
+      stats: { ...this.stats, skillUses: { ...this.stats.skillUses } },
+      px: p.x, py: p.y, at: now,
     };
-    try { localStorage.setItem("game_save", JSON.stringify(data)); if (!silent) this.flash = { text: "Game saved!", t: 1500 }; }
-    catch (e) { if (!silent) this.flash = { text: "Save failed.", t: 1500 }; }
+    try {
+      const list = this.listSaves();
+      list.unshift(data);
+      this.writeSaves(list);
+      if (!silent) this.flash = { text: "Game saved!", t: 1500 };
+    } catch (e) { if (!silent) this.flash = { text: "Save failed.", t: 1500 }; }
   }
-  loadGame() {
-    let data; try { data = JSON.parse(localStorage.getItem("game_save")); } catch (e) { return false; }
+  /* loadGame(id?) — loads the save with the given id, or the most recent. */
+  loadGame(id) {
+    const list = this.listSaves();
+    const data = id ? list.find(s => s.id === id) : list[0];
     if (!data) return false;
     const p = this.player;
     Object.assign(p, {
@@ -368,7 +484,16 @@ class Game {
       x: data.px, y: data.py,
     });
     p.boughtSkills = (data.boughtSkills || []).slice();
-    p.party = (data.party || []).map(m => ({ ...m }));
+    p.party = (data.party || []).map(m => {
+      const lv = (data.lv || p.lv || 1);
+      return {
+        skills: [], equip: { weapon: null, armor: null },
+        maxmp: 6 + lv * 2, mp: 6 + lv * 2,
+        ...m,
+        equip: { weapon: null, armor: null, ...(m.equip || {}) },
+        skills: Array.isArray(m.skills) ? m.skills.slice() : [],
+      };
+    });
     if (data.equipOwned) p.equipOwned = data.equipOwned.slice();
     if (data.equip) p.equip = { weapon: data.equip.weapon || null, armor: data.equip.armor || null };
     if (this.areas.forest.chest) this.areas.forest.chest.opened = !!data.chestOpened;
@@ -376,6 +501,11 @@ class Game {
     const dead = data.dead || { forest: data.dead };  // tolerate v1 saves (flat array)
     for (const id in this.areas)
       this.areas[id].enemies.forEach((e, i) => { e.alive = !(dead[id] && dead[id][i]); });
+    if (data.difficulty) this.difficulty = data.difficulty;
+    this.difficultySel = { casual: 0, normal: 1, hard: 2, hardcore: 3 }[this.difficulty] ?? 1;
+    if (data.stats) this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null, ...data.stats, skillUses: { ...(data.stats.skillUses || {}) } };
+    else this.resetRunStats();
+    this.runId = data.runId || ("r_load_" + Date.now());
     this.area = this.areas[data.area] ? data.area : "forest";
     this.world = this.areas[this.area];
     this.enemies = this.world.enemies;
@@ -578,13 +708,24 @@ class Game {
       if (e.t > 850) { const tgt = e.target; this.encounter = null; this.enterBattle(tgt); }
     }
   }
-  equipBonus(stat) {                                  // summed bonus from worn gear
+  /* "hero" -> player; "ally" -> party member (or null if no ally). */
+  getChar(target) {
+    if (target === "ally") return this.player.party.find(m => m.id === "ally") || null;
+    return this.player;
+  }
+  equipBonusFor(c, stat) {
+    if (!c || !c.equip) return 0;
     let s = 0;
-    for (const slot of EQUIP_SLOTS) { const id = this.player.equip[slot]; if (id) s += EQUIP_BY_ID[id][stat] || 0; }
+    for (const slot of EQUIP_SLOTS) { const id = c.equip[slot]; if (id) s += EQUIP_BY_ID[id][stat] || 0; }
     return s;
   }
-  atkTotal() { return this.player.atk + this.equipBonus("atk"); }
-  defTotal() { return this.player.def + this.equipBonus("def"); }
+  atkTotalFor(c) { return (c?.atk || 0) + this.equipBonusFor(c, "atk"); }
+  defTotalFor(c) { return (c?.def || 0) + this.equipBonusFor(c, "def"); }
+  equipBonus(stat) { return this.equipBonusFor(this.player, stat); }
+  atkTotal() { return this.atkTotalFor(this.player); }
+  defTotal() { return this.defTotalFor(this.player); }
+  /* Slot count for a character (hero or ally) — driven off the hero's level. */
+  slotCountFor() { return Math.floor(this.player.lv / 3); }
 
   loop(t) {
     const dt = Math.min(50, t - this.last); this.last = t;

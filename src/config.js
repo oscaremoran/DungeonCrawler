@@ -65,6 +65,8 @@ const ANIM_FRAMES = { ...LIZ_ANIMS, ...GOB_ANIMS, ...TROLL_ANIMS };  // group ->
 for (const [g, n] of Object.entries(ANIM_FRAMES))
   for (let i = 0; i < n; i++) ASSETS[`${g}_${i}`] = `assets/${g}_${i}.png`;
 for (const s of ["skill_fire", "skill_shield", "skill_bolt", "skill_heal"]) ASSETS[s] = `assets/${s}.png`;
+for (const s of ["diff_casual", "diff_normal", "diff_hard", "diff_hardcore"]) ASSETS[s] = `assets/${s}.png`;
+ASSETS.you_died = "assets/you_died.png";
 
 /* learnable skills (drag into slots; cost MP in battle) */
 const SKILLS = [

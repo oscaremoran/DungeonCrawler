@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>probe</title>
+<style>html,body{margin:0;background:#000} iframe{display:block}</style>
+<iframe id="f" src="/" style="border:0;width:1280px;height:800px"></iframe>
+<script>
+  const q = new URLSearchParams(location.search);
+  const which = q.get("which") || "title";
+  const f = document.getElementById("f");
+  f.addEventListener("load", () => {
+    const tick = () => {
+      const g = f.contentWindow.GAME;
+      if (g && g.art && g.art.ally_portrait) {
+        if (which === "title") { g.state = "title"; }
+        else if (which === "name") { g.state = "name"; }
+        else {
+          g.state = "overworld"; g.fade = 0; g.introShown = true;
+          g.player.lv = 6;
+          g.ui = { screen: which, sel: 0 };
+        }
+        g.fade = 0;
+        document.title = "READY";
+      } else setTimeout(tick, 80);
+    };
+    tick();
+  });
+</script>

@@ -55,7 +55,10 @@ Object.assign(Game.prototype, {
 
   render() {
     if (this.state === "title") this.renderTitle();
+    else if (this.state === "difficulty") this.renderDifficulty();
     else if (this.state === "name") this.renderName();
+    else if (this.state === "saveselect") this.renderSaveSelect();
+    else if (this.state === "gameover") this.renderGameOver();
     else if (this.state === "battle" && this.battle) this.renderBattle();
     else if (this.encounter && this.encounter.phase === "whirl") this.renderWhirl();
     else this.renderOverworld();
@@ -129,8 +132,6 @@ Object.assign(Game.prototype, {
     ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
 
     // a tree and the hero, silhouetted (backlit) on the plateau, gazing at the sun
-    this.drawSilhouette(this.art.tree, W * 0.06, plateauY + 6, H * 0.30, "#0c0a16", false);
-    this.drawSilhouette(this.art.idle, W * 0.20, plateauY + 8, H * 0.26, "#110d20", true);
 
     // a few birds drifting across the sky
     ctx.strokeStyle = "rgba(20,12,30,0.6)"; ctx.lineWidth = 2;
@@ -470,13 +471,20 @@ Object.assign(Game.prototype, {
   skillLayout() {
     const W = this.cv.width, H = this.cv.height;
     const x = 40, y = 36, w = W - 80, h = H - 110;
-    const listX = x + 36, listY = y + 110, rowH = 70;
+    const listX = x + 36, listY = y + 130, rowH = 70;
     const rows = SKILLS.map((s, i) => ({ skill: s, x: listX, y: listY + i * rowH, w: 380, h: 58 }));
     const n = skillSlots(this.player.lv);
-    const slotX = x + w - 320, slotY = y + 116, ss = 74, gap = 22;
+    const slotX = x + w - 320, slotY = y + 138, ss = 74, gap = 22;
     const slots = [];
     for (let i = 0; i < n; i++) slots.push({ i, x: slotX + (i % 3) * (ss + gap), y: slotY + ((i / 3) | 0) * (ss + gap), w: ss, h: ss });
     return { x, y, w, h, rows, slots, n, slotX, slotY };
+  },
+  /* the character whose skills/equip the current menu screen is editing */
+  activeChar() {
+    const ui = this.ui;
+    return (ui && ui.target === "ally")
+      ? (this.player.party.find(m => m.id === "ally") || this.player)
+      : this.player;
   },
   onMouse(type, mx, my) {
     if (this.prompt) {                                // yes/no buttons
@@ -489,13 +497,18 @@ Object.assign(Game.prototype, {
     if (!this.ui) return;
     if (this.ui.screen === "equip") return this.onEquipMouse(type, mx, my);
     if (this.ui.screen !== "skills") return;
-    const ui = this.ui, p = this.player, L = this.skillLayout();
+    const ui = this.ui, p = this.player, c = this.activeChar(), L = this.skillLayout();
     const hit = r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
-    while (p.skills.length < L.n) p.skills.push(null);
-    p.skills.length = L.n;
+    while (c.skills.length < L.n) c.skills.push(null);
+    c.skills.length = L.n;
+    // an item known to the catalog (level-unlocked OR purchased on Garran)
+    const known = id => {
+      const sk = SKILL_BY_ID[id]; if (!sk) return false;
+      return p.lv >= sk.unlock || p.boughtSkills.includes(id);
+    };
     if (type === "down") {
-      for (const r of L.rows) if (hit(r) && (p.lv >= r.skill.unlock || p.boughtSkills.includes(r.skill.id))) { ui.drag = { id: r.skill.id, from: "list", mx, my }; return; }
-      for (const s of L.slots) if (hit(s) && p.skills[s.i]) { ui.drag = { id: p.skills[s.i], from: "slot", slot: s.i, mx, my }; return; }
+      for (const r of L.rows) if (hit(r) && known(r.skill.id)) { ui.drag = { id: r.skill.id, from: "list", mx, my }; return; }
+      for (const s of L.slots) if (hit(s) && c.skills[s.i]) { ui.drag = { id: c.skills[s.i], from: "slot", slot: s.i, mx, my }; return; }
     } else if (type === "move" && ui.drag) {
       ui.drag.mx = mx; ui.drag.my = my; ui.hover = -1;
       for (const s of L.slots) if (hit(s)) ui.hover = s.i;
@@ -503,24 +516,26 @@ Object.assign(Game.prototype, {
       let drop = -1; for (const s of L.slots) if (hit(s)) drop = s.i;
       const id = ui.drag.id;
       if (drop >= 0) {
-        if (ui.drag.from === "slot") { const t = p.skills[drop]; p.skills[drop] = id; p.skills[ui.drag.slot] = t; }
-        else { const ex = p.skills.indexOf(id); if (ex >= 0) p.skills[ex] = null; p.skills[drop] = id; }
-      } else if (ui.drag.from === "slot") p.skills[ui.drag.slot] = null;   // dragged out = unequip
+        if (ui.drag.from === "slot") { const t = c.skills[drop]; c.skills[drop] = id; c.skills[ui.drag.slot] = t; }
+        else { const ex = c.skills.indexOf(id); if (ex >= 0) c.skills[ex] = null; c.skills[drop] = id; }
+      } else if (ui.drag.from === "slot") c.skills[ui.drag.slot] = null;   // dragged out = unequip
       ui.drag = null; ui.hover = -1;
     }
   },
   drawSkillsScreen() {
     const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player, ui = this.ui, art = this.art;
+    const c = this.activeChar();
     const L = this.skillLayout();
-    while (p.skills.length < L.n) p.skills.push(null); p.skills.length = L.n;
+    while (c.skills.length < L.n) c.skills.push(null); c.skills.length = L.n;
     this.drawWindow(L.x, L.y, L.w, L.h);
     this.text("SKILLS", L.x + 28, L.y + 44, { size: 24, bold: true, color: "#ffe9a0" });
     this.text("SKILL SLOTS:  " + L.n, L.x + L.w - 28, L.y + 44, { size: 19, align: "right", color: "#9fd8ff" });
-    this.text("Drag a skill into a slot.  Drag a slot out to remove.", L.x + 28, L.y + 76, { size: 14, color: "#cfd6ff" });
+    this.drawCharTabs(L.x + 28, L.y + 78);
+    this.text("Drag a skill into a slot.  Drag a slot out to remove.", L.x + 28, L.y + 110, { size: 14, color: "#cfd6ff" });
 
     // skill list
     for (const r of L.rows) {
-      const s = r.skill, locked = p.lv < s.unlock && !p.boughtSkills.includes(s.id), equipped = p.skills.includes(s.id);
+      const s = r.skill, locked = p.lv < s.unlock && !p.boughtSkills.includes(s.id), equipped = c.skills.includes(s.id);
       ctx.globalAlpha = locked ? 0.4 : (ui.drag && ui.drag.id === s.id && ui.drag.from === "list" ? 0.35 : 1);
       ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
       ctx.drawImage(art[s.icon], r.x + 6, r.y + 5, 48, 48);
@@ -538,7 +553,7 @@ Object.assign(Game.prototype, {
       ctx.fillStyle = ui.hover === s.i && ui.drag ? "rgba(120,150,230,0.4)" : "rgba(0,0,0,0.35)";
       ctx.strokeStyle = "rgba(220,228,255,0.7)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(s.x, s.y, s.w, s.h, 8); ctx.fill(); ctx.stroke();
-      const id = p.skills[s.i];
+      const id = c.skills[s.i];
       if (id && !(ui.drag && ui.drag.from === "slot" && ui.drag.slot === s.i)) {
         const sk = SKILL_BY_ID[id];
         ctx.drawImage(art[sk.icon], s.x + (s.w - 52) / 2, s.y + 6, 52, 52);
@@ -550,7 +565,34 @@ Object.assign(Game.prototype, {
       const sk = SKILL_BY_ID[ui.drag.id];
       ctx.globalAlpha = 0.9; ctx.drawImage(art[sk.icon], ui.drag.mx - 28, ui.drag.my - 28, 56, 56); ctx.globalAlpha = 1;
     }
-    this.text("ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+    const tab = this.player.party.some(m => m.id === "ally") ? "TAB  switch character  ·  " : "";
+    this.text(tab + "ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+  },
+
+  /* a small two-tab header on Skills/Equip showing whose loadout we're editing */
+  drawCharTabs(x, y) {
+    const ui = this.ui, ally = this.player.party.find(m => m.id === "ally");
+    if (!ally) return;
+    const ctx = this.ctx;
+    const tabs = [
+      { id: "hero", label: this.player.name },
+      { id: "ally", label: ally.name },
+    ];
+    let cx = x;
+    for (const t of tabs) {
+      const sel = (ui.target || "hero") === t.id;
+      ctx.font = "bold 14px Georgia, serif";
+      const w = ctx.measureText(t.label).width + 22;
+      ctx.beginPath(); ctx.roundRect(cx, y - 16, w, 24, 6);
+      ctx.fillStyle = sel ? "rgba(120,90,30,0.85)" : "rgba(20,18,40,0.55)";
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = sel ? "rgba(255,224,128,0.9)" : "rgba(180,180,210,0.35)";
+      ctx.stroke();
+      this.text(t.label, cx + w / 2, y + 1,
+        { align: "center", size: 13, bold: true, color: sel ? "#ffe9a0" : "#cfd6ff", shadow: false });
+      cx += w + 8;
+    }
   },
 
   /* ----------------------------- equip screen --------------------------- */
@@ -565,19 +607,24 @@ Object.assign(Game.prototype, {
     return { x, y, w, h, rows, slots, listX, listY, slotX, slotY };
   },
   onEquipMouse(type, mx, my) {
-    const ui = this.ui, p = this.player, L = this.equipLayout();
+    const ui = this.ui, c = this.activeChar(), L = this.equipLayout();
     const hit = r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
     if (type === "down") {
       for (const r of L.rows) if (hit(r)) { ui.drag = { id: r.id, from: "list", mx, my }; return; }
-      for (const s of L.slots) { const id = p.equip[s.slot]; if (id && hit(s)) { ui.drag = { id, from: "slot", slot: s.slot, mx, my }; return; } }
+      for (const s of L.slots) { const id = c.equip[s.slot]; if (id && hit(s)) { ui.drag = { id, from: "slot", slot: s.slot, mx, my }; return; } }
     } else if (type === "move" && ui.drag) {
       ui.drag.mx = mx; ui.drag.my = my; ui.hover = null;
       for (const s of L.slots) if (hit(s)) ui.hover = s.slot;
     } else if (type === "up" && ui.drag) {
       let drop = null; for (const s of L.slots) if (hit(s)) drop = s.slot;
       const item = EQUIP_BY_ID[ui.drag.id];
-      if (drop && item.slot === drop) p.equip[drop] = ui.drag.id;            // worn (only fits its slot)
-      else if (drop === null && ui.drag.from === "slot") p.equip[ui.drag.slot] = null;  // dragged out = remove
+      if (drop && item.slot === drop) {
+        // a single gear instance can only be worn by one character at a time
+        const other = ui.target === "ally" ? this.player : (this.player.party.find(m => m.id === "ally") || null);
+        if (other && other.equip[drop] === ui.drag.id) other.equip[drop] = null;
+        c.equip[drop] = ui.drag.id;
+      }
+      else if (drop === null && ui.drag.from === "slot") c.equip[ui.drag.slot] = null;  // dragged out = remove
       ui.drag = null; ui.hover = null;
     }
   },
@@ -613,15 +660,20 @@ Object.assign(Game.prototype, {
   },
   drawEquipScreen() {
     const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player, ui = this.ui;
+    const c = this.activeChar();
     const L = this.equipLayout();
     this.drawWindow(L.x, L.y, L.w, L.h);
     this.text("EQUIPMENT", L.x + 28, L.y + 44, { size: 24, bold: true, color: "#ffe9a0" });
-    this.text("ATK " + this.atkTotal() + "    DEF " + this.defTotal(), L.x + L.w - 28, L.y + 44, { size: 19, align: "right", color: "#9fd8ff" });
-    this.text("Drag gear into its slot.  Drag a slot out to remove.", L.x + 28, L.y + 76, { size: 14, color: "#cfd6ff" });
+    this.text("ATK " + this.atkTotalFor(c) + "    DEF " + this.defTotalFor(c),
+      L.x + L.w - 28, L.y + 44, { size: 19, align: "right", color: "#9fd8ff" });
+    this.drawCharTabs(L.x + 28, L.y + 78);
+    this.text("Drag gear into its slot.  Drag a slot out to remove.", L.x + 28, L.y + 110, { size: 14, color: "#cfd6ff" });
 
     // owned gear list
+    const other = ui.target === "ally" ? p : (p.party.find(m => m.id === "ally") || null);
     for (const r of L.rows) {
-      const it = r.item, worn = p.equip[it.slot] === it.id;
+      const it = r.item, worn = c.equip[it.slot] === it.id;
+      const wornByOther = other && other.equip[it.slot] === it.id;
       ctx.globalAlpha = (ui.drag && ui.drag.id === it.id && ui.drag.from === "list") ? 0.35 : 1;
       ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
       this.drawEquipIcon(r.x + 6, r.y + 5, 44, it);
@@ -629,6 +681,7 @@ Object.assign(Game.prototype, {
       const bonus = it.atk ? "+" + it.atk + " ATK" : "+" + it.def + " DEF";
       this.text(EQUIP_SLOTLABEL[it.slot] + "   ·   " + bonus, r.x + 62, r.y + 44, { size: 14, color: "#bcd0f0" });
       if (worn) this.text("equipped", r.x + r.w - 14, r.y + 28, { size: 13, align: "right", color: "#9cf0a0" });
+      else if (wornByOther) this.text("worn by " + other.name, r.x + r.w - 14, r.y + 28, { size: 13, align: "right", color: "#e0b070" });
       ctx.globalAlpha = 1;
     }
     if (!L.rows.length) this.text("(no gear)", L.listX, L.listY + 20, { size: 18, color: "#9aa" });
@@ -641,7 +694,7 @@ Object.assign(Game.prototype, {
       ctx.strokeStyle = "rgba(220,228,255,0.7)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(s.x, s.y, s.w, s.h, 8); ctx.fill(); ctx.stroke();
       this.text(EQUIP_SLOTLABEL[s.slot], s.x + s.w + 18, s.y + 26, { size: 16, bold: true, color: "#dfe4ff" });
-      const id = p.equip[s.slot];
+      const id = c.equip[s.slot];
       if (id && !(ui.drag && ui.drag.from === "slot" && ui.drag.slot === s.slot)) {
         this.drawEquipIcon(s.x + (s.w - 56) / 2, s.y + (s.h - 56) / 2, 56, EQUIP_BY_ID[id]);
         this.text(EQUIP_BY_ID[id].name, s.x + s.w + 18, s.y + 50, { size: 14, color: "#9cf0a0" });
@@ -651,7 +704,8 @@ Object.assign(Game.prototype, {
     }
 
     if (ui.drag) this.drawEquipIcon(ui.drag.mx - 28, ui.drag.my - 28, 56, EQUIP_BY_ID[ui.drag.id]);
-    this.text("ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+    const tab = this.player.party.some(m => m.id === "ally") ? "TAB  switch character  ·  " : "";
+    this.text(tab + "ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
   drawMainMenu() {
@@ -667,8 +721,16 @@ Object.assign(Game.prototype, {
     // party member card (left)
     const px = 24, py = 24, pw = W - cw - 24 - px - 20, ph = 150;
     this.drawWindow(px, py, pw, ph);
-    this.drawPortrait(px + 16, py + 14, ph - 28);
-    const ix = px + 16 + (ph - 28) * (this.art.portrait.width / this.art.portrait.height) + 22;
+    const portraitH = ph - 28;
+    this.drawPortrait(px + 16, py + 14, portraitH);
+    let ix = px + 16 + portraitH * (this.art.portrait.width / this.art.portrait.height) + 18;
+    if (this.art.ally_portrait) {
+      const ally = this.art.ally_portrait;
+      const ah = portraitH * 0.72;
+      const aw = ah * (ally.width / ally.height);
+      this.ctx.drawImage(ally, ix, py + 14 + (portraitH - ah) / 2, aw, ah);
+      ix += aw + 18;
+    }
     this.text(p.name, ix, py + 44, { size: 24, bold: true, color: "#ffe9a0" });
     this.text("LV " + p.lv + "  " + p.job, ix, py + 70, { size: 16, color: "#cfd6ff" });
     this.text("HP", ix, py + 100, { size: 15, color: "#bfe8c0" });
@@ -689,8 +751,16 @@ Object.assign(Game.prototype, {
     const W = this.cv.width, H = this.cv.height, p = this.player;
     const x = 40, y = 36, w = W - 80, h = H - 110;
     this.drawWindow(x, y, w, h);
-    this.drawPortrait(x + 30, y + 30, h - 90);
-    const colX = x + 30 + (h - 90) * (this.art.portrait.width / this.art.portrait.height) + 40;
+    const ph = h - 90;
+    this.drawPortrait(x + 30, y + 30, ph);
+    let colX = x + 30 + ph * (this.art.portrait.width / this.art.portrait.height) + 28;
+    if (this.art.ally_portrait) {
+      const ally = this.art.ally_portrait;
+      const ah = ph * 0.55;
+      const aw = ah * (ally.width / ally.height);
+      this.ctx.drawImage(ally, colX, y + 30 + (ph - ah) / 2, aw, ah);
+      colX += aw + 28;
+    }
     this.text(p.name, colX, y + 56, { size: 30, bold: true, color: "#ffe9a0" });
     this.text(p.job + "   ·   Level " + p.lv, colX, y + 86, { size: 18, color: "#cfd6ff" });
 
@@ -790,6 +860,79 @@ Object.assign(Game.prototype, {
     }
   },
 
+  /* ---------------------------- difficulty ------------------------------- */
+  renderDifficulty() {
+    const ctx = this.ctx, W = this.cv.width, H = this.cv.height, t = this.t / 1000;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1a1340"); g.addColorStop(1, "#3a2550");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    const bw = Math.min(1100, W - 60), bh = Math.min(560, H - 60);
+    const bx = (W - bw) / 2, by = (H - bh) / 2;
+    this.drawWindow(bx, by, bw, bh);
+    this.text("CHOOSE YOUR DIFFICULTY", W / 2, by + 60,
+      { align: "center", size: 30, bold: true, color: "#ffe9a0" });
+
+    const opts = [
+      { id: "casual",   blurb: "A gentler journey for beginners." },
+      { id: "normal",   blurb: "The intended challenge." },
+      { id: "hard",     blurb: "Foes hit harder and endure more." },
+      { id: "hardcore", blurb: "Brutal. For the true warriors." },
+    ];
+
+    const slotW = (bw - 80) / opts.length;
+    const slotsY = by + 110;
+    const slotH = bh - 220;
+
+    opts.forEach((o, i) => {
+      const sel = i === this.difficultySel;
+      const cx = bx + 40 + slotW * (i + 0.5);
+      const cy = slotsY + slotH / 2;
+      const img = this.art["diff_" + o.id];
+      if (!img) return;
+
+      // selected pulse / glow
+      if (sel) {
+        const pulse = 0.55 + 0.35 * Math.sin(t * 4);
+        ctx.save();
+        const glow = ctx.createRadialGradient(cx, cy, 10, cx, cy, slotW * 0.55);
+        glow.addColorStop(0, `rgba(255,220,120,${0.55 * pulse})`);
+        glow.addColorStop(1, "rgba(255,220,120,0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(cx - slotW * 0.6, cy - slotH * 0.55, slotW * 1.2, slotH * 1.1);
+        ctx.restore();
+      }
+
+      // fit the badge inside the slot, preserving aspect
+      const pad = sel ? 8 : 18;
+      const scale = Math.min((slotW - pad * 2) / img.width, (slotH - pad * 2) / img.height);
+      const dw = img.width * scale * (sel ? 1.06 : 1);
+      const dh = img.height * scale * (sel ? 1.06 : 1);
+      ctx.save();
+      ctx.globalAlpha = sel ? 1 : 0.62;
+      ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+      ctx.restore();
+
+      // selection arrow above
+      if (sel) {
+        const blink = 0.45 + 0.55 * Math.sin(t * 6);
+        ctx.fillStyle = `rgba(255,224,128,${blink})`;
+        const ay = slotsY - 14;
+        ctx.beginPath();
+        ctx.moveTo(cx - 10, ay - 10); ctx.lineTo(cx + 10, ay - 10); ctx.lineTo(cx, ay + 2);
+        ctx.closePath(); ctx.fill();
+      }
+    });
+
+    // blurb for the selected option
+    const cur = opts[this.difficultySel];
+    this.text(cur.blurb, W / 2, by + bh - 70,
+      { align: "center", size: 20, color: "#eef1ff" });
+
+    this.text("◀ ▶  select  ·  ENTER  confirm  ·  ESC  back",
+      W / 2, by + bh - 32, { align: "center", size: 15, color: "#cfd6ff" });
+  },
+
   /* ----------------------------- name entry ------------------------------ */
   renderName() {
     const ctx = this.ctx, W = this.cv.width, H = this.cv.height, t = this.t / 1000;
@@ -797,10 +940,19 @@ Object.assign(Game.prototype, {
     g.addColorStop(0, "#1a1340"); g.addColorStop(1, "#3a2550");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 
-    const bw = Math.min(560, W - 80), bh = 280, bx = (W - bw) / 2, by = (H - bh) / 2;
+    const bw = Math.min(720, W - 80), bh = 280, bx = (W - bw) / 2, by = (H - bh) / 2;
     this.drawWindow(bx, by, bw, bh);
-    this.drawPortrait(bx + 28, by + 28, bh - 56);
-    const colX = bx + 28 + (bh - 56) * (this.art.portrait.width / this.art.portrait.height) + 30;
+    const portraitH = bh - 56;
+    const garranAR = this.art.portrait.width / this.art.portrait.height;
+    this.drawPortrait(bx + 28, by + 28, portraitH);
+    let colX = bx + 28 + portraitH * garranAR + 24;
+    if (this.art.ally_portrait) {
+      const ally = this.art.ally_portrait;
+      const ah = portraitH * 0.72;
+      const aw = ah * (ally.width / ally.height);
+      ctx.drawImage(ally, colX, by + 28 + (portraitH - ah) / 2, aw, ah);
+      colX += aw + 24;
+    }
     this.text("NAME THE WANDERER", colX, by + 56, { size: 24, bold: true, color: "#ffe9a0" });
 
     // name field
@@ -833,5 +985,174 @@ Object.assign(Game.prototype, {
     const fl = Math.abs(Math.sin(p * Math.PI * 7)) * p;        // strobe
     ctx.fillStyle = `rgba(255,255,255,${0.55 * fl})`; ctx.fillRect(0, 0, W, H);
     if (p > 0.74) { ctx.fillStyle = `rgba(8,12,22,${(p - 0.74) / 0.26})`; ctx.fillRect(0, 0, W, H); }
+  },
+
+  /* ----------------------------- You Died -------------------------------- */
+  renderGameOver() {
+    const ctx = this.ctx, W = this.cv.width, H = this.cv.height, t = this.t / 1000;
+    const g = this.gameover || { sel: 1 };
+    const hardcore = this.difficulty === "hardcore";
+    const p = this.player, s = this.stats || { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null };
+
+    // black backdrop
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+
+    // background art: scale to "cover" the screen, then darken
+    const img = this.art.you_died;
+    if (img) {
+      const ar = img.width / img.height, sar = W / H;
+      let dw, dh;
+      if (sar > ar) { dw = W; dh = W / ar; } else { dh = H; dw = H * ar; }
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+    }
+
+    // "<HERO> has fallen..."  — placed below the YOU DIED sign in the art
+    const heroName = (p && p.name) || "THE HERO";
+    const headline = heroName + " HAS FALLEN...";
+    const hy = H * 0.50;
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    const big = Math.floor(H * 0.055);
+    ctx.font = `bold ${big}px Georgia, 'Times New Roman', serif`;
+    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillText(headline, W / 2 + 3, hy + 4);
+    ctx.lineWidth = Math.max(3, H * 0.008); ctx.strokeStyle = "#1a0606"; ctx.lineJoin = "round";
+    ctx.strokeText(headline, W / 2, hy);
+    const grad = ctx.createLinearGradient(0, hy - big, 0, hy + big * 0.2);
+    grad.addColorStop(0, "#ffd0c0"); grad.addColorStop(0.5, "#d8341f"); grad.addColorStop(1, "#6a0a0a");
+    ctx.fillStyle = grad; ctx.fillText(headline, W / 2, hy);
+
+    // stats panel
+    const skillUses = s.skillUses || {};
+    const skillEntries = Object.entries(skillUses).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const skillStr = skillEntries.length
+      ? skillEntries.map(([id, n]) => {
+          const sk = (typeof SKILL_BY_ID !== "undefined" && SKILL_BY_ID[id]) ? SKILL_BY_ID[id] : null;
+          return (sk ? sk.name : id) + " ×" + n;
+        }).join(",  ")
+      : "—";
+    const rows = [
+      ["Difficulty",      this.difficulty.toUpperCase()],
+      ["Level reached",   String((p && p.lv) || 1)],
+      ["Enemies slain",   String(s.kills || 0)],
+      ["Damage dealt",    String(s.dmgDealt || 0)],
+      ["Felled by",       s.lastKiller || "—"],
+      ["Most-used skills",skillStr],
+    ];
+
+    const pw = Math.min(720, W - 80), ph = 28 + rows.length * 28;
+    const px = (W - pw) / 2, py = H * 0.56;
+    ctx.fillStyle = "rgba(10,6,6,0.72)";
+    ctx.strokeStyle = "rgba(220,80,40,0.55)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 8); ctx.fill(); ctx.stroke();
+    rows.forEach((r, i) => {
+      const ry = py + 24 + i * 28;
+      this.text(r[0], px + 28, ry, { size: 16, color: "#d9b9a4" });
+      this.text(r[1], px + pw - 28, ry, { size: 16, color: "#ffe9a0", align: "right", bold: true });
+    });
+
+    // buttons: CONTINUE / HOME (Continue greyed on hardcore)
+    const btns = [
+      { id: "continue", label: "CONTINUE", disabled: hardcore },
+      { id: "home",     label: "HOME",     disabled: false },
+    ];
+    const bw = 200, bh = 50, gap = 32, by0 = py + ph + 20;
+    const totalW = bw * btns.length + gap * (btns.length - 1);
+    let bx0 = (W - totalW) / 2;
+    btns.forEach((b, i) => {
+      const x = bx0 + i * (bw + gap);
+      const sel = i === g.sel && !b.disabled;
+      ctx.beginPath(); ctx.roundRect(x, by0, bw, bh, 8);
+      ctx.fillStyle = b.disabled ? "rgba(40,30,30,0.6)"
+                   : sel ? "rgba(120,30,20,0.85)"
+                         : "rgba(40,20,18,0.78)";
+      ctx.fill();
+      ctx.lineWidth = sel ? 3 : 2;
+      ctx.strokeStyle = b.disabled ? "rgba(120,90,80,0.4)"
+                     : sel ? `rgba(255,${180 + Math.round(40 * Math.sin(t * 6))},120,0.95)`
+                           : "rgba(220,80,40,0.6)";
+      ctx.stroke();
+      const color = b.disabled ? "rgba(170,150,150,0.45)" : sel ? "#ffe9a0" : "#e8d8c8";
+      this.text(b.label, x + bw / 2, by0 + bh / 2 + 7, { size: 20, bold: true, color, align: "center" });
+    });
+
+    if (hardcore) {
+      this.text("Hardcore — your save has been consumed.",
+        W / 2, by0 + bh + 26, { align: "center", size: 13, color: "#d9a89a" });
+    } else {
+      this.text("◀ ▶  select  ·  ENTER  confirm",
+        W / 2, by0 + bh + 26, { align: "center", size: 13, color: "#cfb3a8" });
+    }
+  },
+
+  /* ---------------------------- save picker ------------------------------ */
+  renderSaveSelect() {
+    const ctx = this.ctx, W = this.cv.width, H = this.cv.height, t = this.t / 1000;
+    const list = this.listSaves();
+
+    // moody backdrop
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1a1340"); g.addColorStop(1, "#3a2550");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    const bw = Math.min(720, W - 60), bh = Math.min(560, H - 60);
+    const bx = (W - bw) / 2, by = (H - bh) / 2;
+    this.drawWindow(bx, by, bw, bh);
+    this.text("CONTINUE A SAVE", W / 2, by + 50,
+      { align: "center", size: 24, bold: true, color: "#ffe9a0" });
+
+    if (!list.length) {
+      this.text("No saves found.", W / 2, by + bh / 2,
+        { align: "center", size: 18, color: "#cfd6ff" });
+      return;
+    }
+
+    const sel = Math.min(this.saveSel || 0, list.length - 1);
+    const rowH = 64;
+    const listX = bx + 28, listY = by + 80;
+    const listW = bw - 56, listH = bh - 130;
+    const visible = Math.max(1, Math.floor(listH / rowH));
+    const start = Math.max(0, Math.min(list.length - visible, sel - Math.floor(visible / 2)));
+
+    // clip the scroll viewport
+    ctx.save();
+    ctx.beginPath(); ctx.rect(listX, listY, listW, listH); ctx.clip();
+
+    for (let i = start; i < Math.min(list.length, start + visible); i++) {
+      const s = list[i];
+      const y = listY + (i - start) * rowH;
+      const isSel = i === sel;
+
+      ctx.beginPath(); ctx.roundRect(listX, y + 4, listW, rowH - 8, 6);
+      ctx.fillStyle = isSel ? "rgba(80,60,30,0.85)" : "rgba(20,18,40,0.65)";
+      ctx.fill();
+      if (isSel) {
+        const pulse = 0.6 + 0.3 * Math.sin(t * 5);
+        ctx.lineWidth = 2; ctx.strokeStyle = `rgba(255,224,128,${pulse})`;
+        ctx.stroke();
+      } else {
+        ctx.lineWidth = 1; ctx.strokeStyle = "rgba(180,180,210,0.25)"; ctx.stroke();
+      }
+
+      const tx = listX + 16, ty = y + rowH / 2;
+      this.text(s.name || "—", tx, ty - 4, { size: 18, bold: true, color: "#ffe9a0" });
+      const meta = `LV ${s.lv}  ·  ${(s.difficulty || "normal").toUpperCase()}  ·  ${s.area || "?"}`;
+      this.text(meta, tx, ty + 16, { size: 13, color: "#cfd6ff" });
+
+      const when = s.at ? new Date(s.at) : null;
+      const stamp = when
+        ? when.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+        : "";
+      this.text(stamp, listX + listW - 16, ty + 4,
+        { size: 13, color: "#cfd6ff", align: "right" });
+    }
+    ctx.restore();
+
+    // scroll indicators
+    if (start > 0) this.text("▲", bx + bw / 2, listY + 14, { align: "center", size: 16, color: "#ffe9a0" });
+    if (start + visible < list.length)
+      this.text("▼", bx + bw / 2, listY + listH - 4, { align: "center", size: 16, color: "#ffe9a0" });
+
+    this.text("UP / DOWN  select  ·  ENTER  load  ·  DEL  remove  ·  ESC  back",
+      W / 2, by + bh - 24, { align: "center", size: 14, color: "#cfd6ff" });
   }
 });
