@@ -262,7 +262,7 @@ function buildKoroInterior(opt) {
   if (opt.shop) {
     placeObj(r, "crate", cx - 3, iy0 + 3);          // a counter of crates
     placeObj(r, "crate", cx + 3, iy0 + 3);
-    r.npcs.push({ tx: cx, ty: iy0 + 3, name: SHOPS[opt.shop].keeper, shop: opt.shop });
+    r.npcs.push({ tx: cx, ty: iy0 + 3, name: SHOPS[opt.shop].keeper, shop: opt.shop, sprite: "npc_keeper" });
     blocked[iy0 + 3][cx] = true;                    // the keeper blocks their spot
   }
 

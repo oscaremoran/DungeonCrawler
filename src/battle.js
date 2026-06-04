@@ -104,7 +104,8 @@ Object.assign(Game.prototype, {
       if (p.lv > fromLv) {
         p.hp = p.maxhp; p.mp = p.maxmp;
         for (const s of SKILLS) if (s.unlock > fromLv && s.unlock <= p.lv) newSkills.push(s.name);
-        levelups.push({ name: p.name, fromLv, toLv: p.lv, gains, newSkills });
+        const totals = { hp: p.maxhp, mp: p.maxmp, atk: p.atk, def: p.def };
+        levelups.push({ name: p.name, fromLv, toLv: p.lv, gains, totals, newSkills });
       }
     }
 
@@ -127,7 +128,8 @@ Object.assign(Game.prototype, {
           b.ally.mp = am.mp; b.ally.maxmp = am.maxmp;
           b.ally.atk = this.atkTotalFor(am); b.ally.def = this.defTotalFor(am);
         }
-        levelups.push({ name: am.name, fromLv, toLv: am.lv, gains, newSkills: [] });
+        const totals = { hp: am.maxhp, mp: am.maxmp, atk: am.atk, def: am.def };
+        levelups.push({ name: am.name, fromLv, toLv: am.lv, gains, totals, newSkills: [] });
       }
     }
 
@@ -205,7 +207,11 @@ Object.assign(Game.prototype, {
       const ny = this.player.y + TILE * 2.2;
       if (!this.blockedAt(this.player.x, ny)) this.player.y = ny;
     }
-    this.beginTransition("overworld");
+    // We're already standing in the overworld, so don't fade out to black and
+    // back in (that read as an extra blackout). Just hold black and fade in once.
+    this.state = "overworld"; this.exiting = false; this.exitTo = null;
+    this.fade = 1;
+    this.showQueuedDialogue();
   },
 
   /* troll defeated: hero speaks -> fade to black -> arrive in Koro -> speak again */
@@ -282,7 +288,7 @@ Object.assign(Game.prototype, {
     else if (cmd === "Skill") {
       const src = ally ? b.ally.skills : this.player.skills;
       const eq = (src || []).filter(Boolean);
-      if (!eq.length) { this.battleMsg("No skills equipped! (set them in Skills)"); return; }
+      if (!eq.length) { this.battleMsg("No skills equipped! (set them in menu after battle)"); return; }
       b.phase = "submenu"; b.sub = { type: "skill", sel: 0, list: eq };
     }
     else if (cmd === "Item") {
@@ -428,7 +434,7 @@ Object.assign(Game.prototype, {
             b.enemy.meter = 0;
             b.enemy.meterMax = Math.round(b.enemy.meterMax * 1.5);   // each use makes the next cost 50% more
             b.enemySkill = b.cfg.skills[(Math.random() * b.cfg.skills.length) | 0];
-            b.phase = "enemy_skill"; b.step = "wind"; b.timer = 560; b.eLunge = 0;
+            b.phase = "enemy_skill"; b.step = "wind"; b.timer = 1680; b.eLunge = 0;   // hold the "uses skill" banner ~3x longer
             this.battleMsg("The " + b.enemy.name + " uses " + b.enemySkill.name + "!");
           } else {
             b.phase = "enemy_attack"; b.step = "lunge"; b.timer = 300; b.eLunge = 0;
@@ -454,7 +460,7 @@ Object.assign(Game.prototype, {
         break;
       case "enemy_skill":
         if (b.step === "wind") {
-          b.eLunge = Math.min(1, 1 - b.timer / 560);
+          b.eLunge = Math.min(1, 1 - b.timer / 1680);
           if (b.timer <= 0) { this.applyEnemySkill(b.enemySkill); b.step = "impact"; b.timer = 620; b.skillFlash = b.enemySkill.kind; }
         } else {
           b.eLunge = Math.max(0, b.timer / 620);
@@ -481,13 +487,15 @@ Object.assign(Game.prototype, {
      swing 0 = wound up over the shoulder, 1 = chopped forward toward the foe.
      facing left (toward the enemy) unless `faceRight`. */
   drawHandWeapon(cx, baseY, charH, swing, weaponId, faceRight) {
-    const ctx = this.ctx, dir = faceRight ? -1 : 1;     // dir 1 = blade sweeps to the left
+    const ctx = this.ctx, dir = faceRight ? -1 : 1;     // dir 1 = thrust to the left
     const eq = weaponId && EQUIP_BY_ID[weaponId];
     const dagger = eq && /dagger/i.test(eq.id);
     const len = charH * (dagger ? 0.34 : 0.52);
-    // hand sits on the forward side, a little above mid-body
-    const hx = cx - dir * charH * 0.12, hy = baseY - charH * 0.46;
-    const angle = dir * (0.5 - swing * 2.4);            // raise -> chop
+    // a forward thrust: the blade stays level, leveled at the foe, and jabs
+    // forward along the facing direction as the swing builds (no overhead chop)
+    const reach = swing * charH * 0.5;
+    const hx = cx - dir * (charH * 0.1 + reach), hy = baseY - charH * 0.42;
+    const angle = -dir * Math.PI / 2 + dir * 0.08;      // blade held horizontal, point toward the foe
     ctx.save();
     ctx.translate(hx, hy);
     ctx.rotate(angle);
@@ -736,7 +744,7 @@ Object.assign(Game.prototype, {
 
   drawLevelUp() {
     const W = this.cv.width, H = this.cv.height, ctx = this.ctx, b = this.battle, t = b.levelT;
-    const ups = b.levelups || [], r = ups[b.levelIdx] || { name: "", fromLv: 0, toLv: 0, gains: {}, newSkills: [] };
+    const ups = b.levelups || [], r = ups[b.levelIdx] || { name: "", fromLv: 0, toLv: 0, gains: {}, totals: {}, newSkills: [] };
     const cx = W / 2, cy = H * 0.42, a = 0.28 + 0.18 * Math.sin(this.t / 140);
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 340);
     glow.addColorStop(0, `rgba(255,230,150,${a})`); glow.addColorStop(1, "rgba(255,210,80,0)");
@@ -754,12 +762,14 @@ Object.assign(Game.prototype, {
     ctx.restore();
     this.text(r.name, W / 2, by + 92, { align: "center", size: 26, bold: true, color: "#fff3c8" });
     this.text("LV " + r.fromLv + "   →   " + r.toLv, W / 2, by + 124, { align: "center", size: 22, color: "#fff" });
-    const rows = [["Max HP", r.gains.hp], ["Max MP", r.gains.mp], ["Attack", r.gains.atk], ["Defense", r.gains.def]];
-    rows.forEach(([k, v], i) => {
+    const tot = r.totals || {};
+    const rows = [["Max HP", r.gains.hp, tot.hp], ["Max MP", r.gains.mp, tot.mp], ["Attack", r.gains.atk, tot.atk], ["Defense", r.gains.def, tot.def]];
+    rows.forEach(([k, v, total], i) => {
       if (t < 340 + i * 200) return;                  // cascade in
       const yy = by + 166 + i * 30;
-      this.text(k, bx + 64, yy, { size: 18, color: "#cfd6ff" });
-      this.text("+ " + v, bx + bw - 64, yy, { align: "right", size: 18, color: "#9cf0a0" });
+      // show both the gain and the resulting total, e.g. "+ 6,  Max HP = 36"
+      this.text("+ " + v, bx + 64, yy, { size: 18, color: "#9cf0a0" });
+      this.text(k + " = " + total, bx + bw - 64, yy, { align: "right", size: 18, color: "#cfd6ff" });
     });
     if (r.newSkills.length && t > 340 + 4 * 200)
       this.text("Learned: " + r.newSkills.join(", "), W / 2, by + 296, { align: "center", size: 16, color: "#ffd479" });

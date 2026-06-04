@@ -193,7 +193,7 @@ class Game {
         if (this.tryTalkNPC()) return;
         if (this.tryReadSign()) return;
         if (this.tryLockedDoor()) return;
-        if (!this.tryOpenChest()) this.startIntro();
+        this.tryOpenChest();   // action key opens a nearby chest; otherwise does nothing
       }
     }
   }
@@ -293,7 +293,7 @@ class Game {
   /* open the "Name the Contact" entry box before the recruit finalises */
   beginNameContact(n) {
     if (this.hasAlly(n)) return;
-    this.naming = { title: "NAME THE CONTACT", buf: "", onDone: name => this.recruitAlly(n, name) };
+    this.naming = { title: "NAME THE CONTACT", buf: "ELARA", onDone: name => this.recruitAlly(n, name) };
   }
 
   /* Elara joins: add to the party, drop her from the inn, start her following */

@@ -559,8 +559,9 @@ Object.assign(Game.prototype, {
       ctx.globalAlpha = locked ? 0.4 : (ui.drag && ui.drag.id === s.id && ui.drag.from === "list" ? 0.35 : 1);
       ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
       ctx.drawImage(art[s.icon], r.x + 6, r.y + 5, 48, 48);
-      this.text(s.name, r.x + 66, r.y + 26, { size: 18, bold: true, color: locked ? "#9aa" : "#eef1ff" });
-      this.text("Unlocks at Lv " + s.unlock + "   ·   " + s.mp + " MP", r.x + 66, r.y + 48, { size: 14, color: locked ? "#889" : "#bcd0f0" });
+      this.text(s.name, r.x + 66, r.y + 22, { size: 18, bold: true, color: locked ? "#9aa" : "#eef1ff" });
+      this.text("Lv " + s.unlock + "   ·   " + s.mp + " MP", r.x + 66, r.y + 40, { size: 13, color: locked ? "#889" : "#bcd0f0" });
+      this.text(s.desc, r.x + 66, r.y + 56, { size: 13, color: locked ? "#778" : "#aeb8d8" });
       if (locked) this.text("LOCKED", r.x + r.w - 14, r.y + 30, { size: 14, align: "right", color: "#e88" });
       else if (equipped) this.text("equipped", r.x + r.w - 14, r.y + 30, { size: 13, align: "right", color: "#9cf0a0" });
       ctx.globalAlpha = 1;
@@ -781,7 +782,7 @@ Object.assign(Game.prototype, {
     // gold + hint (bottom-left, below the cards)
     this.drawWindow(px, cardY, 220, 50);
     this.text("Gold", px + 18, cardY + 31, { size: 17, color: "#cfd6ff" });
-    this.text(p.gold + " GOLD", px + 202, cardY + 31, { size: 17, align: "right", color: "#ffe9a0" });
+    this.text(p.gold + " ", px + 202, cardY + 31, { size: 17, align: "right", color: "#ffe9a0" });
     this.text("↑↓ select   ENTER choose   ESC close", this.cv.width / 2, this.cv.height - 22,
       { align: "center", size: 14, color: "rgba(230,235,255,0.7)" });
   },
@@ -1036,19 +1037,7 @@ Object.assign(Game.prototype, {
       ctx.fillStyle = vg; ctx.fillRect(0, H * 0.48, W, H * 0.52);
     }
 
-    // small subtitle below the art's baked-in "YOU DIED" sign (no giant duplicate headline)
-    const heroName = (p && p.name) || "THE HERO";
-    const headline = heroName + " HAS FALLEN...";
-    const hy = H * 0.40;
-    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-    const big = Math.floor(H * 0.034);
-    ctx.font = `bold ${big}px Georgia, 'Times New Roman', serif`;
-    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillText(headline, W / 2 + 2, hy + 3);
-    ctx.lineWidth = Math.max(2, H * 0.006); ctx.strokeStyle = "#1a0606"; ctx.lineJoin = "round";
-    ctx.strokeText(headline, W / 2, hy);
-    const grad = ctx.createLinearGradient(0, hy - big, 0, hy + big * 0.2);
-    grad.addColorStop(0, "#ffd0c0"); grad.addColorStop(0.5, "#d8341f"); grad.addColorStop(1, "#6a0a0a");
-    ctx.fillStyle = grad; ctx.fillText(headline, W / 2, hy);
+    // (the art has its own baked-in "YOU DIED" sign — no "<name> has fallen" headline)
 
     // stats panel
     const skillUses = s.skillUses || {};
