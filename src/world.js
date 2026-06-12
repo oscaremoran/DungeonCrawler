@@ -73,16 +73,20 @@ function buildWorld(seed) {
     { id: 6, type: "lizard", tx: midX - 9,  ty: 23 },
     { id: 7, type: "lizard", tx: midX + 5,  ty: 24 },
     { id: 8, type: "lizard", tx: midX + 13, ty: 25 },
+    // gray wolves prowling the clearing
+    { id: 9,  type: "wolf", tx: midX - 3,  ty: 10 },
+    { id: 10, type: "wolf", tx: midX + 4,  ty: 16 },
+    { id: 11, type: "wolf", tx: midX - 8,  ty: 21 },
   ];
-  /* a treasure chest sitting at the north end of the central dirt trail */
-  const chest = { tx: trailTopX, ty: 6, opened: false, item: "leather_tunic" };
-  for (let i = objects.length - 1; i >= 0; i--)            // clear anything on its tile
-    if (objects[i].tx === chest.tx && objects[i].ty === chest.ty) objects.splice(i, 1);
-  if (inB(chest.tx, chest.ty)) blocked[chest.ty][chest.tx] = true;  // solid: bump to open
+  /* a treasure chest sitting in the open at the north end of the central trail */
+  const chests = [{ tx: trailTopX, ty: 6, opened: false, item: "leather_tunic" }];
+  for (let i = objects.length - 1; i >= 0; i--)             // clear anything on its tile
+    if (objects[i].tx === chests[0].tx && objects[i].ty === chests[0].ty) objects.splice(i, 1);
+  if (inB(chests[0].tx, chests[0].ty)) blocked[chests[0].ty][chests[0].tx] = true;  // solid: bump to open
 
   const exits = [{ side: "east", ty0: gateY - 1, ty1: gateY + 1, to: "room2", entry: "west", autosave: true }];
   const entries = { east: { tx: MAP_W - 3, ty: gateY } };  // where we land returning from Koro road
-  return { ground, blocked, objects, spawn, enemyDefs, exits, entries, gateY, chest };
+  return { ground, blocked, objects, spawn, enemyDefs, exits, entries, gateY, chests };
 }
 
 /* ----------------------- enclosed battle rooms --------------------------- */
@@ -172,6 +176,30 @@ function placeObj(r, kind, tx, ty) {
     for (let dx = 0; dx < (k.blockW || 1); dx++) if (inB(tx + dx, ty + dy)) r.blocked[ty + dy][tx + dx] = true;
 }
 
+/* add treasure chests to an area built with placeObj (objects/blocked/ground/chests).
+   Each chest tile is made solid (bump to open); chests flagged `hide` get nestled
+   in a ring of bushes plus a front-cover bush on their own tile (bushes are
+   non-solid, so the hero can still push through to reach them). */
+function addChests(r, defs) {
+  const inB = (x, y) => x >= 0 && y >= 0 && x < MAP_W && y < MAP_H;
+  r.chests = r.chests || [];
+  for (const c of defs) {
+    for (let i = r.objects.length - 1; i >= 0; i--)
+      if (r.objects[i].tx === c.tx && r.objects[i].ty === c.ty) r.objects.splice(i, 1);
+    if (inB(c.tx, c.ty)) r.blocked[c.ty][c.tx] = true;
+    if (c.hide) {
+      const ring = [[0, 0], [-1, 0], [1, 0], [0, -1], [-1, -1], [1, -1], [-1, 1], [0, 1], [1, 1]];
+      for (const [dx, dy] of ring) {
+        const bx = c.tx + dx, by = c.ty + dy;
+        if (!inB(bx, by) || r.ground[by][bx] !== G_GRASS) continue;
+        if (dx === 0 && dy === 0) placeObj(r, "bush", bx, by);     // front-cover bush on the chest tile
+        else if (!r.blocked[by][bx]) placeObj(r, "bush", bx, by);
+      }
+    }
+    r.chests.push({ tx: c.tx, ty: c.ty, opened: false, item: c.item, gold: c.gold });
+  }
+}
+
 /* the Village of Koro — a wooden-plank plaza ringed by grassy cliffs, reached
  * after the troll falls. Five houses line the square; four can be entered
  * (the stores + the inn), the purple one is sealed for now. A central fountain. */
@@ -199,7 +227,7 @@ function buildKoro() {
   const houses = [
     { kind: "house_red",    htx: 6,  hty: 6,  to: "koro_def",   entry: "from_def" },
     { kind: "house_blue",   htx: 18, hty: 6,  to: "koro_off",   entry: "from_off" },
-    { kind: "house_green",  htx: 30, hty: 6,  locked: true },
+    { kind: "house_green",  htx: 30, hty: 6,  to: "koro_skill", entry: "from_skill" },
     { kind: "house_yellow", htx: 10, hty: 19, to: "koro_inn",   entry: "from_inn" },
     { kind: "house_purple", htx: 26, hty: 19, locked: true },
   ];
@@ -221,6 +249,19 @@ function buildKoro() {
   r.portals.push({ tx: cx, ty: iy1, to: "room3", entry: "from_koro" });
   r.entries.from_room3 = { tx: cx, ty: iy1 - 1 };
 
+  // northern gate: a permanent gap in the cliff wall onto the road to the world
+  // map. It's always visible, but a guard stands planted in the gateway and bars
+  // the way north until the inn mercenaries are dealt with (see openKoroGate).
+  ground[iy0][cx] = G_DIRT; blocked[iy0][cx] = false;
+  r.objects = r.objects.filter(o => !(o.kind === "cliff" && o.tx === cx && o.ty === iy0));
+  r.portals.push({ tx: cx, ty: iy0, to: "worldmap", entry: "from_koro" });
+  r.gate = { tx: cx, ty: iy0 };
+  r.entries.from_worldmap = { tx: cx, ty: iy0 + 1 };
+  r.npcs.push({ tx: cx, ty: iy0, name: "GATE GUARD", sprite: "npc_keeper", portrait: "npc_keeper", gateGuard: true });
+  blocked[iy0][cx] = true;                           // the guard bars the road north
+  placeObj(r, "sign", cx + 2, iy0 + 1);
+  r.signs.push({ tx: cx + 2, ty: iy0 + 1, text: ["North Gate — the road to Xal'Korr."] });
+
   // a signboard standing in front of the Dragon Den Inn (the yellow house)
   placeObj(r, "sign", 13, 22);
   r.signs.push({ tx: 13, ty: 22, text: ["Dragon Den Inn"] });
@@ -233,6 +274,82 @@ function buildKoro() {
     placeObj(r, x % 2 ? "flowers_red" : "flowers_orange", x, iy0 + 1);
     placeObj(r, x % 2 ? "flowers_orange" : "flowers_red", x, iy1 - 1);
   }
+  return r;
+}
+
+/* Open Koro's northern gate (idempotent). Called once the inn mercenaries are
+ * beaten: the guard barring the gateway stands down (is removed) and the road
+ * tile he held is cleared, so the hero can step through to the world map. */
+function openKoroGate(r) {
+  if (!r || r._gateOpen || !r.gate) return;
+  const { tx, ty } = r.gate;
+  r.npcs = (r.npcs || []).filter(n => !n.gateGuard);
+  r.blocked[ty][tx] = false;
+  r._gateOpen = true;
+}
+
+/* the world map — a grassy region north of Koro, a winding dirt road pushing on
+ * toward Xal'Korr. A simple, enemy-free overworld for now: tree-walled, with a
+ * southern gap that leads back down into the town. */
+function buildWorldMap() {
+  const rng = mulberry32(0x4711);
+  const ground = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(G_GRASS));
+  const blocked = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(false));
+  const r = { ground, blocked, objects: [], enemyDefs: [], exits: [], npcs: [], portals: [], lockedDoors: [], signs: [] };
+  const rx = (MAP_W / 2) | 0;
+  // a wolf pack roams the road north of Koro
+  r.enemyDefs = [
+    { id: 0, type: "wolf", tx: 12, ty: 9 },
+    { id: 1, type: "wolf", tx: 33, ty: 13 },
+    { id: 2, type: "wolf", tx: 15, ty: 21 },
+  ];
+
+  // a winding dirt road climbing north up the map
+  let tx = rx;
+  for (let y = MAP_H - 1; y >= 2; y--) {
+    for (let w = -1; w <= 1; w++) if (tx + w >= 0 && tx + w < MAP_W) ground[y][tx + w] = G_DIRT;
+    if (rng() < 0.4) tx += rng() < 0.5 ? -1 : 1;
+    tx = Math.max(6, Math.min(MAP_W - 7, tx));
+  }
+
+  // dense tree wall around the border, leaving the southern road-mouth open
+  for (let x = 0; x < MAP_W; x++) {
+    for (let y = 0; y < MAP_H; y++) {
+      const edge = x < 2 || y < 2 || x >= MAP_W - 2 || y >= MAP_H - 2;
+      if (!edge) continue;
+      const southMouth = y >= MAP_H - 2 && Math.abs(x - rx) <= 1;
+      if (southMouth || ground[y][x] === G_DIRT) continue;
+      if (rng() < 0.92) placeObj(r, "tree", x, y);
+    }
+  }
+
+  // scattered, non-blocking understory + a few rocks
+  const sprinkle = (kind, n, chance) => {
+    for (let i = 0; i < n; i++) {
+      const x = 3 + ((rng() * (MAP_W - 6)) | 0), y = 3 + ((rng() * (MAP_H - 6)) | 0);
+      if (ground[y][x] !== G_GRASS || blocked[y][x]) continue;
+      if (rng() < chance) placeObj(r, kind, x, y);
+    }
+  };
+  sprinkle("rock", 8, 0.7);
+  sprinkle("bush", 26, 0.7);
+  sprinkle("flowers_red", 22, 0.7);
+  sprinkle("flowers_orange", 22, 0.7);
+
+  // arrive from Koro at the southern road-mouth; step back onto the mouth to return
+  r.entries = { from_koro: { tx: rx, ty: MAP_H - 4 } };
+  r.spawn = { tx: rx, ty: MAP_H - 4 };
+  r.portals.push({ tx: rx, ty: MAP_H - 2, to: "koro", entry: "from_worldmap" });
+  // a signpost by the entrance
+  placeObj(r, "sign", rx + 2, MAP_H - 5);
+  r.signs.push({ tx: rx + 2, ty: MAP_H - 5, text: ["Xal'Korr, City of Bone — north.", "Koro — back south."] });
+
+  // three chests tucked away in the bushes off the road, well clear of the dirt
+  addChests(r, [
+    { tx: 6,          ty: 6,          item: "steel_dagger", hide: true },
+    { tx: MAP_W - 7,  ty: 7,          item: "chain_mail",   hide: true },
+    { tx: 7,          ty: MAP_H - 8,  gold: 250,            hide: true },
+  ]);
   return r;
 }
 
@@ -284,6 +401,12 @@ function buildKoroInterior(opt) {
     table(24, 17);
     sit(24, 16, {
       sprite: "ally_idle", name: "ELARA", portrait: "ally_portrait", ally: true,
+    });
+    // a bar running down the right side: a back-shelf of crates against the wall,
+    // with the innkeeper standing in front of it (approachable from the left).
+    for (let ty = iy0 + 2; ty <= iy0 + 6; ty++) placeObj(r, "crate", ix1 - 1, ty);
+    sit(ix1 - 2, iy0 + 3, {
+      sprite: "npc_keeper", name: "INNKEEPER", portrait: "npc_keeper", innkeeper: true,
     });
   }
   return r;

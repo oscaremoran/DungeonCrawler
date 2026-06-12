@@ -61,19 +61,27 @@ const ASSETS = {
 const LIZ_ANIMS   = { liz_idle: 3, liz_sleep: 3, liz_roar: 4, liz_attack: 4, liz_hurt: 3, liz_death: 4 };
 const GOB_ANIMS   = { gob_idle: 4, gob_walk: 6, gob_attack: 6, gob_hurt: 3, gob_die: 4, gob_victory: 4 };
 const TROLL_ANIMS = { troll_idle: 4, troll_walk: 6, troll_attack: 3, troll_hurt: 3, troll_death: 4 };
-const ANIM_FRAMES = { ...LIZ_ANIMS, ...GOB_ANIMS, ...TROLL_ANIMS };  // group -> frame count
+// Mercenary — sliced from the Thrust spritesheet (merc_thrust = the jab he attacks with)
+const MERC_ANIMS  = { merc_idle: 8, merc_thrust: 8, merc_hurt: 4, merc_die: 6 };
+// Gray Wolf — sliced from a 4x4 sheet (idle / charge / attack / hurt+dead)
+const WOLF_ANIMS  = { wolf_idle: 4, wolf_charge: 4, wolf_attack: 4, wolf_hurt: 2, wolf_death: 2 };
+const ANIM_FRAMES = { ...LIZ_ANIMS, ...GOB_ANIMS, ...TROLL_ANIMS, ...MERC_ANIMS, ...WOLF_ANIMS };  // group -> frame count
 for (const [g, n] of Object.entries(ANIM_FRAMES))
   for (let i = 0; i < n; i++) ASSETS[`${g}_${i}`] = `assets/${g}_${i}.png`;
-for (const s of ["skill_fire", "skill_shield", "skill_bolt", "skill_heal"]) ASSETS[s] = `assets/${s}.png`;
+for (const s of ["skill_fire", "skill_shield", "skill_bolt", "skill_heal", "skill_ember", "skill_inferno", "skill_jolt", "skill_mend"]) ASSETS[s] = `assets/${s}.png`;
 for (const s of ["diff_casual", "diff_normal", "diff_hard", "diff_hardcore"]) ASSETS[s] = `assets/${s}.png`;
 ASSETS.you_died = "assets/you_died.png";
 
 /* learnable skills (drag into slots; cost MP in battle) */
 const SKILLS = [
   { id: "heal",   name: "Healing",        unlock: 3, mp: 2, icon: "skill_heal",   kind: "heal",   power: 32, desc: "Restore HP to the hero." },
+  { id: "mend",   name: "Mend",           unlock: 2, mp: 1, icon: "skill_mend",   kind: "heal",   power: 18, desc: "Restore a little HP." },
+  { id: "ember",  name: "Ember",          unlock: 2, mp: 3, icon: "skill_ember",  kind: "fire",   power: 1.2, desc: "A quick burst of flame." },
   { id: "fire",   name: "Flaming Sword",  unlock: 4, mp: 5, icon: "skill_fire",   kind: "fire",   power: 1.7, desc: "Fire damage to one foe." },
-  { id: "shield", name: "Blue Shield",    unlock: 6, mp: 4, icon: "skill_shield", kind: "shield", power: 0,   desc: "Sharply raise defense for a turn." },
+  { id: "inferno", name: "Inferno",       unlock: 8, mp: 9, icon: "skill_inferno", kind: "fire",  power: 2.6, desc: "A roaring blaze engulfs one foe." },
+  { id: "jolt",   name: "Static Jolt",    unlock: 4, mp: 4, icon: "skill_jolt",   kind: "bolt",   power: 1.5, desc: "A crackling jolt of lightning." },
   { id: "bolt",   name: "Lightning Bolt", unlock: 9, mp: 8, icon: "skill_bolt",   kind: "bolt",   power: 2.3, desc: "Heavy lightning damage to one foe." },
+  { id: "shield", name: "Blue Shield",    unlock: 6, mp: 4, icon: "skill_shield", kind: "shield", power: 0,   desc: "Sharply raise defense for a turn." },
 ];
 const SKILL_BY_ID = Object.fromEntries(SKILLS.map(s => [s.id, s]));
 const skillSlots = lv => Math.floor(lv / 3);
@@ -124,16 +132,39 @@ const ENEMY_TYPES = {
     ow: { idle: "gob_idle", alert: "gob_attack", tiles: 1.6 },
     battle: { idle: "gob_idle", attack: "gob_attack", hurt: "gob_hurt", death: "gob_die", h: 0.26, flip: false },
   },
+  wolf: {
+    name: "Gray Wolf", hp: 190, atk: 20, def: 7, exp: 36, gold: 38,
+    intro: "A Gray Wolf bares its fangs and lunges!",
+    skillMeter: 18,            // aggressive — charges its skill fast
+    skills: [
+      { name: "Lunging Bite", kind: "hit", power: 1.7 },
+      { name: "Savage Rend", kind: "double", power: 0.85 },
+    ],
+    ow: { idle: "wolf_idle", alert: "wolf_charge", tiles: 2.9 },   // canvas is padded wide; scale up to keep size
+    battle: { idle: "wolf_idle", attack: "wolf_attack", hurt: "wolf_hurt", death: "wolf_death", h: 0.182, flip: false },
+  },
   troll: {
-    name: "Troll", hp: 200, atk: 26, def: 15, exp: 150, gold: 90, boss: true,
+    name: "Troll", hp: 200, atk: 22, def: 12, exp: 150, gold: 90, boss: true,
     intro: "The Troll swipes at you!",
     skillMeter: 35,
     skills: [
-      { name: "Boulder Throw", kind: "hit", power: 1.8 },
-      { name: "Enrage", kind: "buff", buff: 1.4 },
+      { name: "Boulder Throw", kind: "hit", power: 1.7 },
+      { name: "Enrage", kind: "buff", buff: 1.2 },
     ],
     ow: { idle: "troll_idle", alert: "troll_attack", tiles: 3.1 },
     battle: { idle: "troll_idle", attack: "troll_attack", hurt: "troll_hurt", death: "troll_death", h: 0.44, flip: false },
+  },
+  mercenary: {
+    name: "Mercenary", hp: 92, atk: 18, def: 7, exp: 64, gold: 85,
+    intro: "A mercenary comes at you, blade leveled!",
+    skillMeter: 22,
+    // both the basic Attack and these skills play the THRUST animation (battle.attack)
+    skills: [
+      { name: "Cutthroat Thrust", kind: "hit", power: 1.9 },
+      { name: "Twin Fang", kind: "double", power: 1.95 },
+    ],
+    ow: { idle: "merc_idle", alert: "merc_thrust", tiles: 2.0 },
+    battle: { idle: "merc_idle", attack: "merc_thrust", hurt: "merc_hurt", death: "merc_die", h: 0.34, flip: false },
   },
 };
 
@@ -157,6 +188,22 @@ const SHOPS = {
       { type: "equip", id: "knight_sword", price: 420 },
     ],
   },
+  // The reopened green building: a skill seller. Each skill book teaches one
+  // skill outright (added to boughtSkills, so it's usable before its level gate).
+  skill: {
+    title: "Skill Shop", keeper: "MIRA",
+    greeting: ["Spells bound in vellum and wax.", "Every book a new trick. Which calls to you?"],
+    wares: [
+      { type: "skill", id: "mend",    price: 60 },
+      { type: "skill", id: "ember",   price: 80 },
+      { type: "skill", id: "heal",    price: 130 },
+      { type: "skill", id: "jolt",    price: 150 },
+      { type: "skill", id: "fire",    price: 170 },
+      { type: "skill", id: "shield",  price: 220 },
+      { type: "skill", id: "inferno", price: 340 },
+      { type: "skill", id: "bolt",    price: 380 },
+    ],
+  },
 };
 
 /* the game's title — change this string to rename the game */
@@ -164,7 +211,15 @@ const GAME_TITLE = "Game";
 const GAME_SUBTITLE = "";
 const AREA_NAME = "Greenwood Forest";
 
-const MAIN_MENU = ["Items", "Skills", "Equip", "Status", "Save"];
+const MAIN_MENU = ["Items", "Skills", "Equip", "Status", "Quests", "Save"];
+
+/* quest log entries — added/completed as the story progresses (see game.js). */
+const QUESTS = {
+  reach_koro:    { name: "Reach Koro",        desc: "Travel east through Greenwood Forest to the town of Koro." },
+  defeat_troll:  { name: "Defeat the Troll",  desc: "A monstrous Troll guards the path ahead. Defeat it to reach Koro." },
+  find_contact:  { name: "Find the Contact",  desc: "Seek out your contact at the Dragon Den Inn in Koro." },
+  reach_xalkorr: { name: "Reach Xal'Korr",    desc: "The north gate is open. Journey on to Xal'Korr, the City of Bone." },
+};
 
 function loadAll(map) {
   const keys = Object.keys(map);

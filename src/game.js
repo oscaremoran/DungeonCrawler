@@ -50,7 +50,9 @@ class Game {
       forest: buildWorld(1337), room2: buildRoom2(), room3: buildRoom3(), koro: buildKoro(),
       koro_def:   buildKoroInterior({ shop: "def",   returnEntry: "from_def" }),
       koro_off:   buildKoroInterior({ shop: "off",   returnEntry: "from_off" }),
+      koro_skill: buildKoroInterior({ shop: "skill", returnEntry: "from_skill" }),
       koro_inn:   buildKoroInterior({ inn: true, returnEntry: "from_inn" }),
+      worldmap:   buildWorldMap(),
     };
     for (const id in this.areas) {                  // instantiate persistent enemies per area
       const w = this.areas[id];
@@ -92,6 +94,9 @@ class Game {
     this.dialogue = null;    // null | { name, lines, page, portrait, onClose }
     this.queuedDialogue = null; // shown once the next fade-transition settles
     this.introShown = false;
+    this.cutscene = null;       // null | { type, actors, ... } — scripted overworld scene
+    this.mercSceneDone = false; // the Dragon Den Inn mercenary ambush has played out
+    this.mercDefeated = false;  // mercenaries beaten -> Koro's north gate is open
 
     this.enemies = this.world.enemies;   // overworld enemies in the current area
     this.npcs = this.world.npcs;         // shopkeepers in the current area
@@ -102,6 +107,10 @@ class Game {
     this.prompt = null;      // yes/no confirmation { sel, target, text }
     this.nameBuf = "GARRAN"; // name-entry buffer
     this.bossTalkCD = 0;
+
+    // --- quest log: ordered list of { id, done }; first quest is live from the start ---
+    this.quests = [{ id: "reach_koro", done: false }];
+    this.notifs = [];           // stacked toast notifications (quest updates, etc.)
 
     // --- difficulty (set on New Game; casual|normal|hard|hardcore) ---
     this.difficulty = "normal";
@@ -224,6 +233,7 @@ class Game {
         else if (pick === "Status") this.ui = { screen: "status", sel: 0 };
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
         else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
+        else if (pick === "Quests") this.ui = { screen: "quests", sel: 0 };
         else if (pick === "Save") {
           if (this.difficulty === "hardcore") this.flash = { text: "Hardcore — saving is disabled.", t: 1600 };
           else this.saveGame();
@@ -241,20 +251,30 @@ class Game {
     }
   }
 
-  /* open the trail-end chest if the hero is standing beside it */
+  /* open the nearest unopened chest the hero is standing beside */
   tryOpenChest() {
-    const chest = this.world.chest; if (!chest || chest.opened) return false;
     const p = this.player;
-    const cx = chest.tx * TILE + TILE / 2, cy = (chest.ty + 0.5) * TILE;
-    if (Math.hypot(p.x - cx, p.y - cy) > TILE * 1.7) return false;
-    chest.opened = true;
-    const it = EQUIP_BY_ID[chest.item];
-    if (!p.equipOwned.includes(chest.item)) p.equipOwned.push(chest.item);
-    this.dialogue = { name: p.name, page: 0, lines: [
-      ["A " + it.name + "!", it.desc],
-      ["Equip it from the menu", "(press M, then Equip)."],
-    ]};
-    return true;
+    for (const chest of (this.world.chests || [])) {
+      if (chest.opened) continue;
+      const cx = chest.tx * TILE + TILE / 2, cy = (chest.ty + 0.5) * TILE;
+      if (Math.hypot(p.x - cx, p.y - cy) > TILE * 1.7) continue;
+      chest.opened = true;
+      if (chest.gold) {                                // a pouch of coin
+        p.gold += chest.gold;
+        this.dialogue = { name: p.name, page: 0, lines: [
+          ["A pouch of gold!", "+ " + chest.gold + " gold."],
+        ]};
+      } else {                                         // a piece of gear
+        const it = EQUIP_BY_ID[chest.item];
+        if (!p.equipOwned.includes(chest.item)) p.equipOwned.push(chest.item);
+        this.dialogue = { name: p.name, page: 0, lines: [
+          ["A " + it.name + "!", it.desc],
+          ["Equip it from the menu", "(press M, then Equip)."],
+        ]};
+      }
+      return true;
+    }
+    return false;
   }
 
   /* talk to a nearby NPC: shopkeeper opens a store, Elara can be recruited,
@@ -272,14 +292,36 @@ class Game {
         };
       } else if (n.ally) {
         this.dialogue = {
-          name: n.name, page: 0, portrait: n.sprite,
+          name: n.name, page: 0, portrait: "ally_portrait",
           lines: [
             ["You're the one who felled the Troll?", "Nice work, the boss says to", "go to Xal'Korr, City of Bone."],
             ["It's deadly, but", "we'd make a better profit."],
             ["Let me come with you.", "Two blades are better than one."],
+            ["Let's talk to the innkeeper.", "He'll unlock the north gate for us."],
           ],
           onClose: () => this.beginNameContact(n),
         };
+      } else if (n.innkeeper) {
+        if (!this.hasAlly()) {
+          // gated: you must speak with Elara (and take her on) before he'll deal with you
+          this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
+            ["I've no words for you yet, stranger."],
+          ]};
+        } else if (this.mercSceneDone) {
+          this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
+            ["...", "(He keeps a wary eye on the door,", "rag wringing in his fists.)"],
+          ]};
+        } else {
+          this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
+            ["So you're the pair the boss spoke of.", "Good. Koro needs blades it can trust."],
+            ["The road to Xal'Korr is open.", "Pelreth is waiting. Move swiftly."],
+            ["Wait. The door...", "I didn't send for anyone else."],
+          ], onClose: () => this.startMercScene(n) };
+        }
+      } else if (n.gateGuard) {
+        this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
+          ["Hold. The north road's closed.", "Koro's got trouble within its own walls—", "no one leaves for Xal'Korr until it's settled."],
+        ]};
       } else {
         this.dialogue = { name: n.name, page: 0, portrait: n.sprite, lines: n.talk || [["..."]] };
       }
@@ -314,6 +356,7 @@ class Game {
     this.npcs = this.npcs.filter(x => x !== n);
     if (this.world.npcs) this.world.npcs = this.world.npcs.filter(x => x !== n);
     this.seedTrail();
+    this.completeQuest("find_contact");
     this.flash = { text: nm + " joined the party!", t: 1800 };
   }
 
@@ -321,6 +364,123 @@ class Game {
   seedTrail() {
     const p = this.player;
     this.trail = Array.from({ length: 80 }, () => ({ x: p.x, y: p.y, face: p.face, moving: false, frame: 0 }));
+  }
+
+  /* ------------------------------- quest log ----------------------------- */
+  hasQuest(id) { return this.quests.some(q => q.id === id); }
+  /* push a stacked toast (quest updates etc.) — these queue rather than clobber,
+     so several can fire on the same beat (e.g. two quests complete at once). */
+  pushNotif(text, color) {
+    this.notifs.push({ text, color: color || "#ffe9b0", t: 2600, max: 2600 });
+    if (this.notifs.length > 4) this.notifs.shift();   // cap the stack
+  }
+  /* add a new quest (active) unless it's already in the log */
+  addQuest(id) {
+    if (!QUESTS[id] || this.hasQuest(id)) return;
+    this.quests.push({ id, done: false });
+    this.pushNotif("New Quest:  " + QUESTS[id].name, "#ffd479");
+  }
+  /* mark an existing quest complete */
+  completeQuest(id) {
+    const q = this.quests.find(q => q.id === id);
+    if (q && !q.done) { q.done = true; this.pushNotif("Quest Complete:  " + QUESTS[id].name, "#9cf0a0"); }
+  }
+  /* the active (first unfinished) quest, or null if all are done */
+  activeQuest() { return (this.quests || []).find(q => !q.done) || null; }
+  /* tile {tx,ty} in the CURRENT area to point the minimap's quest marker at, or
+     null if the objective isn't reachable from here. */
+  questMarkerTile() {
+    const q = this.activeQuest(); if (!q) return null;
+    const w = this.world;
+    const eastExit = () => {
+      const ex = (w.exits || []).find(e => e.side === "east");
+      return ex ? { tx: MAP_W - 2, ty: (ex.ty0 + ex.ty1) / 2 } : null;
+    };
+    const portalTo = pred => { const pp = (w.portals || []).find(pred); return pp ? { tx: pp.tx, ty: pp.ty } : null; };
+    if (q.id === "defeat_troll") {
+      const boss = (this.enemies || []).find(e => e.alive && ENEMY_TYPES[e.type] && ENEMY_TYPES[e.type].boss);
+      if (boss) return { tx: boss.x / TILE, ty: boss.y / TILE - 0.5 };
+      return eastExit();
+    }
+    if (q.id === "find_contact") {
+      const elara = (this.npcs || []).find(n => n.ally);
+      if (elara) return { tx: elara.x / TILE, ty: elara.y / TILE - 0.5 };
+      return portalTo(p => p.to === "koro_inn") || eastExit();   // not inside yet: head for the inn door
+    }
+    if (q.id === "reach_xalkorr") {
+      return portalTo(p => p.to === "worldmap")
+        || (this.area === "worldmap" ? { tx: (MAP_W / 2) | 0, ty: 2 } : eastExit());
+    }
+    return eastExit();   // reach_koro (default): press on east toward town
+  }
+
+  /* advance the quest log when the hero first sets foot in an area */
+  updateQuestsForArea(id) {
+    if (id === "room3") this.addQuest("defeat_troll");
+    else if (id === "koro") {
+      this.completeQuest("reach_koro");
+      this.completeQuest("defeat_troll");
+      this.addQuest("find_contact");
+    }
+  }
+
+  /* --------------------------- mercenary ambush -------------------------- */
+  /* Four mercenaries stride in through the inn door and confront the party.
+   * Spawned at the doorway, they walk to confront positions; once all have
+   * arrived their leader speaks, then the screen drops into a battle. */
+  startMercScene() {
+    const door = (this.world.portals && this.world.portals[0]) || { tx: 21, ty: 22 };
+    const px = (tx) => tx * TILE + TILE / 2, py = (ty) => (ty + 1) * TILE;
+    // staggered spawns at the door, fanning out to confront the party near the bar
+    const plan = [
+      { tx: 26, ty: 11, delay: 0,   sx: door.tx,     sy: door.ty },
+      { tx: 25, ty: 13, delay: 160, sx: door.tx - 1, sy: door.ty },
+      { tx: 26, ty: 14, delay: 320, sx: door.tx + 1, sy: door.ty },
+      { tx: 24, ty: 12, delay: 480, sx: door.tx,     sy: door.ty - 1 },
+    ];
+    this.cutscene = {
+      type: "merc", t: 0, talked: false,
+      actors: plan.map(a => ({
+        x: px(a.sx), y: py(a.sy), tx: a.tx, ty: a.ty,
+        delay: a.delay, moving: false, face: 1, frame: 0, animT: 0,
+      })),
+    };
+    this.player.moving = false; this.player.frame = 0;
+  }
+  updateCutscene(dt) {
+    const cs = this.cutscene; cs.t += dt;
+    const px = (tx) => tx * TILE + TILE / 2, py = (ty) => (ty + 1) * TILE;
+    let allArrived = true;
+    for (const a of cs.actors) {
+      if (cs.t < a.delay) { allArrived = false; continue; }
+      const dx = px(a.tx) - a.x, dy = py(a.ty) - a.y, dist = Math.hypot(dx, dy);
+      if (dist > 3) {
+        const step = SPEED * 0.95 * (dt / (1000 / 60)), m = Math.min(step, dist);
+        a.x += (dx / dist) * m; a.y += (dy / dist) * m;
+        a.face = dx >= 0 ? 1 : -1; a.moving = true;
+        a.animT += dt;
+        if (a.animT > 1000 / 8) { a.animT = 0; a.frame = (a.frame + 1) % ANIM_FRAMES.merc_idle; }
+        allArrived = false;
+      } else { a.moving = false; a.frame = 0; }
+    }
+    if (allArrived && !cs.talked) {
+      cs.talked = true;
+      this.dialogue = {
+        name: "MERCENARY", page: 0, portrait: "merc_idle_0",
+        lines: [
+          ["That's far enough. Our boss has new orders—", "and you two aren't in them anymore."],
+          ["Nothing personal. Just business."],
+        ],
+        onClose: () => this.beginMercBattle(),
+      };
+    }
+  }
+  /* the parley ends — drop straight into the fight (one Mercenary stands in for
+   * the band until the battle engine can field a whole group). */
+  beginMercBattle() {
+    this.mercSceneDone = true;
+    this.cutscene = null;
+    this.enterBattle({ type: "mercenary", alive: true, scripted: true });
   }
 
   /* read a signboard the hero is standing in front of */
@@ -509,9 +669,13 @@ class Game {
       gold: p.gold, skills: p.skills.slice(), boughtSkills: p.boughtSkills.slice(),
       party: p.party.map(m => ({ ...m })),
       equipOwned: p.equipOwned.slice(), equip: { ...p.equip },
-      chestOpened: !!(this.areas.forest.chest && this.areas.forest.chest.opened),
+      chestsOpened: Object.fromEntries(Object.keys(this.areas)
+        .filter(id => this.areas[id].chests)
+        .map(id => [id, this.areas[id].chests.map(c => !!c.opened)])),
       items: this.items.map(i => ({ name: i.name, qty: i.qty })),
       area: this.area, dead, difficulty: this.difficulty,
+      mercSceneDone: !!this.mercSceneDone, mercDefeated: !!this.mercDefeated,
+      quests: this.quests.map(q => ({ id: q.id, done: !!q.done })),
       stats: { ...this.stats, skillUses: { ...this.stats.skillUses } },
       px: p.x, py: p.y, at: now,
     };
@@ -547,11 +711,28 @@ class Game {
     });
     if (data.equipOwned) p.equipOwned = data.equipOwned.slice();
     if (data.equip) p.equip = { weapon: data.equip.weapon || null, armor: data.equip.armor || null };
-    if (this.areas.forest.chest) this.areas.forest.chest.opened = !!data.chestOpened;
+    const co = data.chestsOpened;
+    if (co && !Array.isArray(co)) {                               // per-area map (current format)
+      for (const id in this.areas) {
+        const cs = this.areas[id].chests; if (cs && co[id]) cs.forEach((c, i) => { c.opened = !!co[id][i]; });
+      }
+    } else if (Array.isArray(co)) {                              // back-compat: flat forest array
+      (this.areas.forest.chests || []).forEach((c, i) => { c.opened = !!co[i]; });
+    } else if (this.areas.forest.chests && this.areas.forest.chests[0]) {
+      this.areas.forest.chests[0].opened = !!data.chestOpened;   // back-compat: v3 single chest
+    }
     for (const it of this.items) { const s = (data.items || []).find(i => i.name === it.name); it.qty = s ? s.qty : it.qty; }
     const dead = data.dead || { forest: data.dead };  // tolerate v1 saves (flat array)
     for (const id in this.areas)
       this.areas[id].enemies.forEach((e, i) => { e.alive = !(dead[id] && dead[id][i]); });
+    this.mercSceneDone = !!data.mercSceneDone;
+    this.mercDefeated = !!data.mercDefeated;
+    // restore the quest log (tolerate old saves with none)
+    this.quests = Array.isArray(data.quests) && data.quests.length
+      ? data.quests.filter(q => QUESTS[q.id]).map(q => ({ id: q.id, done: !!q.done }))
+      : [{ id: "reach_koro", done: false }];
+    if (this.mercDefeated) openKoroGate(this.areas.koro);   // restore the opened gate
+    this.cutscene = null;
     if (data.difficulty) this.difficulty = data.difficulty;
     this.difficultySel = { casual: 0, normal: 1, hard: 2, hardcore: 3 }[this.difficulty] ?? 1;
     if (data.stats) this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null, ...data.stats, skillUses: { ...(data.stats.skillUses || {}) } };
@@ -596,6 +777,12 @@ class Game {
 
     if (this.cheated) return;                         // frozen on the DON'T CHEAT screen
     if (!this.devMode) this.checkIntegrity();         // catch tampered hero state
+
+    // age out stacked toast notifications (they advance in every screen/state)
+    if (this.notifs && this.notifs.length) {
+      for (const nft of this.notifs) nft.t -= dt;
+      this.notifs = this.notifs.filter(nft => nft.t > 0);
+    }
 
     // area-to-area transition: fade to black, swap rooms, fade back in
     if (this.transition) {
@@ -644,6 +831,7 @@ class Game {
     if (this.autosaveAnim) { this.autosaveAnim.t -= dt; if (this.autosaveAnim.t <= 0) this.autosaveAnim = null; }
 
     if (this.encounter) { this.updateEncounter(dt); return; }
+    if (this.cutscene) { this.updateCutscene(dt); return; }   // scripted scene: actors move, player frozen
     if (this.ui || this.dialogue || this.prompt || this.shop || this.naming) { p.moving = false; p.frame = 0; return; }  // paused for UI
 
     const k = this.keys;
@@ -751,6 +939,7 @@ class Game {
     this.player.y = e.ty * TILE + TILE / 2;
     this.encounter = null; this.dialogue = null; this.shop = null; this.encounterCD = 1200; this.bossTalkCD = 0;
     this.portalCD = 600;     // brief grace so we don't instantly re-trigger the door we arrived on
+    this.updateQuestsForArea(id);
     if (this.player.party.length) this.seedTrail();
     if (autosave && this.difficulty !== "hardcore") { this.saveGame(true); this.autosaveAnim = { t: 2000 }; }
   }

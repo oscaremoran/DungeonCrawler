@@ -35,6 +35,20 @@ Object.assign(Game.prototype, {
   },
   battleMsg(s) { this.battle.msg = s; },
   calcDmg(atk, def) { return Math.max(1, atk - def + (Math.floor(Math.random() * 4) - 1)); },
+
+  /* critical-hit chance (as a fraction): the hero/ally crit at LV%, the enemy at
+   * (maxHP / 20)% — so tougher foes land crits more often. */
+  critChance(side) {
+    if (side === "player") return Math.max(0, this.player.lv) / 100;
+    return Math.max(0, (this.battle.enemy.maxhp / 20)) / 100;
+  },
+  /* roll for a crit and, on success, scale the damage: hero/ally 3x–5x, enemy 2x–4x.
+   * returns { dmg, crit }. */
+  applyCrit(dmg, side) {
+    if (Math.random() >= this.critChance(side)) return { dmg, crit: false };
+    const mult = side === "player" ? (3 + Math.random() * 2) : (2 + Math.random() * 2);
+    return { dmg: Math.max(1, Math.round(dmg * mult)), crit: true };
+  },
   addFloat(who, val, color) { this.battle.floats.push({ who, text: "" + val, color, t: 900 }); },
 
   /* the enemy lands a blow on "hero" or "ally": applies defend/shield mitigation,
@@ -43,23 +57,27 @@ Object.assign(Game.prototype, {
     const b = this.battle;
     if (who === "ally") {
       let dmg = this.calcDmg(atkVal, b.ally.def);
+      const c = this.applyCrit(dmg, "enemy"); dmg = c.dmg;
       if (b.allyShieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.allyShieldBuff = false; }
       else if (b.allyDefending) dmg = Math.max(1, Math.floor(dmg / 2));
       b.ally.hp = Math.max(0, b.ally.hp - dmg); b.ally.hurtT = 400;
-      this.addFloat("ally", dmg, "#ff8a8a");
+      this.addFloat("ally", dmg, c.crit ? "#ff3030" : "#ff8a8a");
       b.enemy.meter += Math.ceil(dmg * 0.5);          // dealing damage also charges its meter
       if (b.ally.hp <= 0) { b.ally.ko = true; this.battleMsg(b.ally.name + " is knocked out!"); }
+      else if (c.crit) this.battleMsg("A CRITICAL blow! " + b.ally.name + " takes " + dmg + " damage!");
       else if (announce) this.battleMsg(b.ally.name + " takes " + dmg + " damage!");
       return dmg;
     }
     let dmg = this.calcDmg(atkVal, this.defTotal());
+    const c = this.applyCrit(dmg, "enemy"); dmg = c.dmg;
     if (b.shieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.shieldBuff = false; }
     else if (b.defending) dmg = Math.max(1, Math.floor(dmg / 2));
     this.player.hp = Math.max(0, this.player.hp - dmg); b.heroHurt = 400;
-    this.addFloat("hero", dmg, "#ff8a8a");
+    this.addFloat("hero", dmg, c.crit ? "#ff3030" : "#ff8a8a");
     b.enemy.meter += Math.ceil(dmg * 0.5);            // dealing damage also charges its meter
     // a fallen hero is only "down", not game over, while Elara still stands
     if (this.player.hp <= 0 && !b.heroKO) { b.heroKO = true; this.battleMsg(this.player.name + " is knocked out!"); }
+    else if (c.crit) this.battleMsg("A CRITICAL blow! " + this.player.name + " takes " + dmg + " damage!");
     else if (announce) this.battleMsg(this.player.name + " takes " + dmg + " damage!");
     return dmg;
   },
@@ -202,6 +220,19 @@ Object.assign(Game.prototype, {
     }
     if (result === "win" && tgt) {
       tgt.alive = false;                              // slain
+      if (tgt.type === "mercenary" && !this.mercDefeated) {
+        this.mercDefeated = true;
+        this.addQuest("reach_xalkorr");               // the road north is finally open
+        openKoroGate(this.areas.koro);                // Koro's north gate swings open
+        // Garran catches his breath, then the innkeeper announces the open gate
+        this.queuedDialogue = { name: this.player.name, page: 0, lines: [
+          ["(pant, pant)", "Whoever sent them wants us gone..."],
+        ], onClose: () => {
+          this.dialogue = { name: "INNKEEPER", page: 0, portrait: "npc_keeper", lines: [
+            ["The north gate stands open now —", "the road to Xal'Korr lies beyond."],
+          ]};
+        }};
+      }
       if (ENEMY_TYPES[tgt.type].boss) { this.beginBossOutro(); return; }
       // back away from where it stood, but only onto open ground (rooms have walls)
       const ny = this.player.y + TILE * 2.2;
@@ -330,23 +361,18 @@ Object.assign(Game.prototype, {
     if (caster.mp < sk.mp) { this.battleMsg("Not enough MP for " + sk.name + "!"); return; }
     caster.mp -= sk.mp; b.sub = null; b.skill = sk;
     this.stats.skillUses[sk.id] = (this.stats.skillUses[sk.id] || 0) + 1;
-    if (sk.kind === "heal") {
-      const heal = Math.min(sk.power, caster.maxhp - caster.hp); caster.hp += heal;
-      this.addFloat(ally ? "ally" : "hero", "+" + heal, "#9cf0a0");
-      this.battleMsg(caster.name + " casts Healing. +" + heal + " HP");
-      after();
-    } else if (sk.kind === "shield") {
+    if (sk.kind === "shield") {
       if (ally) { b.allyShieldBuff = true; } else { b.shieldBuff = true; }
       this.battleMsg(caster.name + " raises the Blue Shield!");
       after();
-    } else { // fire / bolt damage skill
+    } else { // heal / fire / bolt — play a cast animation, resolve at the impact frame
       if (ally) {
         b.phase = "ally_skill"; b.step = "cast"; b.timer = 520; b.allyLunge = 0;
       } else {
         b.phase = "hero_skill"; b.step = "cast"; b.timer = 520; b.heroLunge = 0;
       }
-      b.fx = { kind: sk.kind, t: 0 };
-      this.battleMsg(caster.name + " unleashes " + sk.name + "!");
+      b.fx = { kind: sk.id, t: 0 };   // FX keyed on the specific skill, not just its kind
+      this.battleMsg(caster.name + (sk.kind === "heal" ? " casts " : " unleashes ") + sk.name + "!");
     }
   },
 
@@ -368,11 +394,13 @@ Object.assign(Game.prototype, {
         if (b.step === "lunge") {
           b.heroLunge = Math.min(1, 1 - b.timer / 260);
           if (b.timer <= 0) {
-            const dmg = this.calcDmg(this.atkTotal(), b.enemy.def);
+            let dmg = this.calcDmg(this.atkTotal(), b.enemy.def);
+            const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
             this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
-            this.addFloat("enemy", dmg, "#ffffff");
-            this.battleMsg(this.player.name + " strikes for " + dmg + "!");
+            this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : "#ffffff");
+            this.battleMsg(c.crit ? this.player.name + " lands a CRITICAL hit for " + dmg + "!"
+                                  : this.player.name + " strikes for " + dmg + "!");
             b.step = "return"; b.timer = 420;
           }
         } else {
@@ -384,12 +412,19 @@ Object.assign(Game.prototype, {
         if (b.step === "cast") {
           if (b.timer <= 0) {
             const sk = b.skill;
-            const base = this.atkTotal() * sk.power + (sk.kind === "bolt" ? 10 : 6);
-            const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
-            b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
-            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
-            this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
-            this.battleMsg(sk.name + " hits for " + dmg + "!");
+            if (sk.kind === "heal") {
+              const p = this.player, heal = Math.min(sk.power, p.maxhp - p.hp); p.hp += heal;
+              this.addFloat("hero", "+" + heal, "#9cf0a0");
+              this.battleMsg(p.name + " restores " + heal + " HP!");
+            } else {
+              const base = this.atkTotal() * sk.power + (sk.kind === "bolt" ? 10 : 6);
+              let dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
+              const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
+              b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
+              this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
+              this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : (sk.kind === "fire" ? "#ffb24a" : "#9fd8ff"));
+              this.battleMsg(c.crit ? sk.name + " CRITICALS for " + dmg + "!" : sk.name + " hits for " + dmg + "!");
+            }
             b.step = "impact"; b.timer = 520;
           }
         } else if (b.timer <= 0) { b.fx = null; this.afterHeroAction(); }
@@ -401,11 +436,13 @@ Object.assign(Game.prototype, {
         if (b.step === "lunge") {
           b.allyLunge = Math.min(1, 1 - b.timer / 260);
           if (b.timer <= 0) {
-            const dmg = this.calcDmg(b.ally.atk, b.enemy.def);
+            let dmg = this.calcDmg(b.ally.atk, b.enemy.def);
+            const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
             this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
-            this.addFloat("enemy", dmg, "#ffd0a0");
-            this.battleMsg(b.ally.name + " hits for " + dmg + "!");
+            this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : "#ffd0a0");
+            this.battleMsg(c.crit ? b.ally.name + " lands a CRITICAL hit for " + dmg + "!"
+                                  : b.ally.name + " hits for " + dmg + "!");
             b.step = "return"; b.timer = 380;
           }
         } else {
@@ -417,12 +454,19 @@ Object.assign(Game.prototype, {
         if (b.step === "cast") {
           if (b.timer <= 0) {
             const sk = b.skill;
-            const base = b.ally.atk * sk.power + (sk.kind === "bolt" ? 10 : 6);
-            const dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
-            b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
-            this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
-            this.addFloat("enemy", dmg, sk.kind === "fire" ? "#ffb24a" : "#9fd8ff");
-            this.battleMsg(sk.name + " hits for " + dmg + "!");
+            if (sk.kind === "heal") {
+              const a = b.ally, heal = Math.min(sk.power, a.maxhp - a.hp); a.hp += heal;
+              this.addFloat("ally", "+" + heal, "#9cf0a0");
+              this.battleMsg(a.name + " restores " + heal + " HP!");
+            } else {
+              const base = b.ally.atk * sk.power + (sk.kind === "bolt" ? 10 : 6);
+              let dmg = Math.max(1, Math.round(base) - b.enemy.def + (Math.floor(Math.random() * 5) - 2));
+              const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
+              b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 420;
+              this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
+              this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : (sk.kind === "fire" ? "#ffb24a" : "#9fd8ff"));
+              this.battleMsg(c.crit ? sk.name + " CRITICALS for " + dmg + "!" : sk.name + " hits for " + dmg + "!");
+            }
             b.step = "impact"; b.timer = 520;
           }
         } else if (b.timer <= 0) { b.fx = null; this.afterAllyAction(); }
@@ -528,6 +572,41 @@ Object.assign(Game.prototype, {
     ctx.strokeStyle = "rgba(40,50,60,0.5)"; ctx.lineWidth = 1; ctx.stroke();
   },
 
+  /* a burst of `n` little particles streaking from (sx,sy) to (tx,ty), staggered
+     so they trail. shape "sq" = square spark, "plus" = a small plus sign. */
+  fxSparks(sx, sy, tx, ty, t, n, palette, shape) {
+    const ctx = this.ctx;
+    for (let i = 0; i < n; i++) {
+      const prog = (t - i * 26) / 340;                 // staggered launch per spark
+      if (prog <= 0 || prog >= 1.25) continue;
+      const e = Math.min(1, prog), ang = (i / n) * Math.PI * 2 + i * 0.7;
+      const curve = (1 - e) * 34;
+      const x = sx + (tx - sx) * e + Math.cos(ang) * curve;
+      const y = sy + (ty - sy) * e + Math.sin(ang) * curve - Math.sin(e * Math.PI) * 24;
+      ctx.globalAlpha = Math.max(0, prog < 1 ? 1 : (1.25 - prog) / 0.25);
+      ctx.fillStyle = palette[i % palette.length];
+      const s = 7;
+      if (shape === "plus") { ctx.fillRect(x - s, y - 2, s * 2, 4); ctx.fillRect(x - 2, y - s, 4, s * 2); }
+      else ctx.fillRect(x - s / 2, y - s / 2, s, s);
+    }
+    ctx.globalAlpha = 1;
+  },
+  /* `n` particles converging inward onto (cx,cy) — used for self-target heals */
+  fxConverge(cx, cy, t, n, palette) {
+    const ctx = this.ctx;
+    for (let i = 0; i < n; i++) {
+      const prog = (t - i * 22) / 360;
+      if (prog <= 0 || prog >= 1.2) continue;
+      const e = Math.min(1, prog), ang = (i / n) * Math.PI * 2;
+      const R = 84 * (1 - e);
+      const x = cx + Math.cos(ang) * R, y = cy + Math.sin(ang) * R - Math.sin(e * Math.PI) * 12;
+      ctx.globalAlpha = Math.max(0, prog < 1 ? 1 : (1.2 - prog) / 0.2);
+      ctx.fillStyle = palette[i % palette.length];
+      ctx.fillRect(x - 3, y - 3, 7, 7);
+    }
+    ctx.globalAlpha = 1;
+  },
+
   renderBattle() {
     const ctx = this.ctx, W = this.cv.width, H = this.cv.height, b = this.battle, p = this.player, art = this.art;
 
@@ -594,21 +673,35 @@ Object.assign(Game.prototype, {
       ctx.globalAlpha = 1;
     }
 
-    // --- skill FX over the enemy ---
+    // --- skill FX (visual keyed on the specific skill id) ---
     if (b.fx) {
-      const fxX = exX, fxY = eBaseY - H * 0.13, prog = Math.min(1, b.fx.t / 900);
-      if (b.fx.kind === "fire") {
-        const r = 28 + prog * 90;
-        const g = ctx.createRadialGradient(fxX, fxY, 0, fxX, fxY, r);
+      const id = b.fx.kind, t = b.fx.t;
+      const eFxX = exX, eFxY = eBaseY - H * 0.16;                       // over the enemy
+      const csx = b.actor === "ally" ? ayX : hxX;                       // caster origin
+      const csy = (b.actor === "ally" ? ayBaseY : hBaseY) - H * 0.14;
+      if (id === "ember") {
+        this.fxSparks(csx, csy, eFxX, eFxY, t, 8, ["#141414", "#ff5a1e", "#cc2410", "#ff9a3a"], "sq");
+      } else if (id === "jolt") {
+        this.fxSparks(csx, csy, eFxX, eFxY, t, 8, ["#5ab0ff", "#bfe6ff", "#2f7fe0"], "plus");
+      } else if (id === "mend" || id === "heal") {
+        this.fxConverge(csx, csy, t, 8, ["#7cff7c", "#2ecc40", "#bfffbf"]);
+      } else if (id === "inferno") {
+        const pulse = Math.sin(Math.min(1, t / 520) * Math.PI);         // fade in then out
+        ctx.fillStyle = `rgba(${(Math.floor(t / 60) % 2) ? "255,60,20" : "255,150,30"},${0.6 * pulse})`;
+        ctx.fillRect(0, 0, W, H);
+      } else if (id === "fire") {
+        const prog = Math.min(1, t / 900), r = 28 + prog * 90;
+        const g = ctx.createRadialGradient(eFxX, eFxY, 0, eFxX, eFxY, r);
         g.addColorStop(0, `rgba(255,244,190,${0.9 * (1 - prog)})`);
         g.addColorStop(0.5, `rgba(255,140,40,${0.7 * (1 - prog)})`);
         g.addColorStop(1, "rgba(255,80,0,0)");
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(fxX, fxY, r, 0, 7); ctx.fill();
-      } else {
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(eFxX, eFxY, r, 0, 7); ctx.fill();
+      } else if (id === "bolt") {
+        const prog = Math.min(1, t / 900);
         ctx.fillStyle = `rgba(180,220,255,${0.35 * (1 - prog)})`; ctx.fillRect(0, 0, W, H);
         ctx.strokeStyle = `rgba(170,220,255,${1 - prog})`; ctx.lineWidth = 6; ctx.lineCap = "round";
-        ctx.beginPath(); ctx.moveTo(fxX, 0);
-        for (let yy = 0; yy < eBaseY - 16; yy += 26) ctx.lineTo(fxX + (Math.random() - 0.5) * 44, yy);
+        ctx.beginPath(); ctx.moveTo(eFxX, 0);
+        for (let yy = 0; yy < eBaseY - 16; yy += 26) ctx.lineTo(eFxX + (Math.random() - 0.5) * 44, yy);
         ctx.stroke();
       }
     }

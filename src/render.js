@@ -64,6 +64,7 @@ Object.assign(Game.prototype, {
     else if (this.encounter && this.encounter.phase === "whirl") this.renderWhirl();
     else this.renderOverworld();
 
+    if (this.notifs && this.notifs.length) this.drawNotifs();
     if (this.flash) this.drawFlash();
 
     // global fade overlay (load-in / transitions)
@@ -289,8 +290,7 @@ Object.assign(Game.prototype, {
         this.drawSprite(art[o.kind], worldX, baseY, k.widthTiles, false);
       }});
     }
-    const chest = this.world.chest;
-    if (chest) {
+    for (const chest of (this.world.chests || [])) {
       const cwx = chest.tx * TILE + TILE / 2, cby = (chest.ty + 1) * TILE;
       renderables.push({ sortY: (chest.ty + 0.9) * TILE, draw: () => {
         shadow(cwx, cby, 0.85);
@@ -319,6 +319,17 @@ Object.assign(Game.prototype, {
         this.drawSprite(img, n.x, n.y + bob, 1.0, false);
       }});
     }
+    // scripted cutscene actors (e.g. the mercenaries striding into the inn)
+    if (this.cutscene && this.cutscene.actors) {
+      for (const a of this.cutscene.actors) {
+        const fr = a.moving ? (a.frame % ANIM_FRAMES.merc_idle) : 0;
+        const img = art[`merc_idle_${fr}`] || art.merc_idle_0;
+        renderables.push({ sortY: a.y, draw: () => {
+          shadow(a.x, a.y, 0.9);
+          this.drawSprite(img, a.x, a.y + 14, 2.0, a.face === -1);
+        }});
+      }
+    }
     // party followers trail the hero along recent poses (walk-cycle animated)
     const heroPixelH = p.wTiles * TILE * (art.idle.height / art.idle.width);   // Garran's on-screen height
     p.party.forEach((m, i) => {
@@ -341,6 +352,9 @@ Object.assign(Game.prototype, {
     });
     renderables.sort((a, b) => a.sortY - b.sortY);
     for (const r of renderables) r.draw();
+
+    // --- minimap (hidden while a full-screen panel is up) ---
+    if (!this.ui && !this.shop && !this.dialogue && !this.naming && !this.prompt) this.drawMinimap();
 
     // --- overlays ---
     if (this.ui) this.drawMenu();
@@ -465,6 +479,66 @@ Object.assign(Game.prototype, {
     ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 7); ctx.closePath(); ctx.fill();
   },
 
+  /* bottom-left minimap of the current area: terrain tiles + marker dots
+     (white = hero, black = enemies, green = current quest, red = shops). */
+  drawMinimap() {
+    const ctx = this.ctx, H = this.cv.height, p = this.player, w = this.world;
+    const cell = 4, mapW = MAP_W * cell, mapH = MAP_H * cell, pad = 8;
+    const boxX = 14, boxY = H - mapH - pad * 2 - 14;
+    this.drawWindow(boxX, boxY, mapW + pad * 2, mapH + pad * 2);
+    const mx = boxX + pad, my = boxY + pad;
+
+    // chest tiles are solid, but shouldn't betray themselves as dark squares
+    const chestTiles = new Set((w.chests || []).map(c => c.ty * MAP_W + c.tx));
+
+    // terrain: blocked tiles dark, walkable tinted by ground type
+    for (let ty = 0; ty < MAP_H; ty++) {
+      for (let tx = 0; tx < MAP_W; tx++) {
+        let col;
+        if (w.blocked[ty][tx] && !chestTiles.has(ty * MAP_W + tx)) col = "#16241b";
+        else {
+          const g = w.ground[ty][tx];
+          col = g === G_DIRT ? "#6b5836" : (g === G_WOOD || g === G_INN) ? "#6e4f33" : "#34603a";
+        }
+        ctx.fillStyle = col;
+        ctx.fillRect(mx + tx * cell, my + ty * cell, cell, cell);
+      }
+    }
+
+    const dot = (tx, ty, color, r) => {
+      const cx = mx + tx * cell, cy = my + ty * cell;
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
+    };
+    // shops (blue): shopkeeper NPCs in here, plus store-building doors in town
+    for (const n of (this.npcs || [])) if (n.shop) dot(n.x / TILE, n.y / TILE - 0.5, "#4aa8ff", 3);
+    for (const pt of (w.portals || [])) if (pt.to === "koro_def" || pt.to === "koro_off" || pt.to === "koro_skill") dot(pt.tx + 0.5, pt.ty, "#4aa8ff", 3);
+    // enemies (red)
+    for (const e of (this.enemies || [])) if (e.alive) dot(e.x / TILE, e.y / TILE - 0.5, "#ff4444", 2.5);
+    // current quest objective (green, gently pulsing)
+    const qm = this.questMarkerTile();
+    if (qm) dot(qm.tx, qm.ty, "#4cff6a", 2.6 + Math.sin(this.t / 200) * 1.1);
+    // player (white) on top, ringed for contrast
+    dot(p.x / TILE, p.y / TILE, "#ffffff", 3);
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(mx + (p.x / TILE) * cell, my + (p.y / TILE) * cell, 3, 0, 7); ctx.stroke();
+  },
+
+  /* stacked toast notifications (quest updates etc.), top-right, newest on top */
+  drawNotifs() {
+    const W = this.cv.width, ctx = this.ctx;
+    const nw = 360, x = W - nw - 24, rh = 50, gap = 10;
+    let y = 96;                                        // sits below the world HUD
+    for (const n of this.notifs) {
+      const fadeIn = Math.min(1, (n.max - n.t) / 200);   // ease in just after spawn
+      const fadeOut = Math.min(1, n.t / 320);            // ease out before expiry
+      ctx.globalAlpha = Math.max(0, Math.min(fadeIn, fadeOut));
+      this.drawWindow(x, y, nw, rh);
+      this.text(n.text, x + nw / 2, y + rh / 2 + 6, { align: "center", size: 16, color: n.color });
+      ctx.globalAlpha = 1;
+      y += rh + gap;
+    }
+  },
+
   drawFlash() {
     const W = this.cv.width, H = this.cv.height, ctx = this.ctx;
     const a = Math.min(1, this.flash.t / 300);
@@ -485,14 +559,53 @@ Object.assign(Game.prototype, {
     else if (ui.screen === "items") this.drawItemsScreen();
     else if (ui.screen === "skills") this.drawSkillsScreen();
     else if (ui.screen === "equip") this.drawEquipScreen();
+    else if (ui.screen === "quests") this.drawQuestsScreen();
+  },
+
+  /* ----------------------------- quests screen --------------------------- */
+  drawQuestsScreen() {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx;
+    const x = 40, y = 36, w = W - 80, h = H - 110;
+    this.drawWindow(x, y, w, h);
+    this.text("QUEST LOG", x + 28, y + 44, { size: 24, bold: true, color: "#ffe9a0" });
+
+    const quests = this.quests || [];
+    if (!quests.length) {
+      this.text("No quests yet.", x + 28, y + 100, { size: 18, color: "#cfd6ff" });
+    }
+    let ry = y + 90;
+    const cardW = w - 56, cardH = 78;
+    quests.forEach(q => {
+      const def = QUESTS[q.id]; if (!def) return;
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      ctx.beginPath(); ctx.roundRect(x + 28, ry, cardW, cardH, 8); ctx.fill();
+      // status pip
+      const px = x + 50, py = ry + cardH / 2;
+      ctx.beginPath(); ctx.arc(px, py, 9, 0, 7);
+      ctx.fillStyle = q.done ? "#5cd06a" : "#ffd479"; ctx.fill();
+      if (q.done) {                                    // checkmark
+        ctx.strokeStyle = "#123"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(px - 4, py); ctx.lineTo(px - 1, py + 4); ctx.lineTo(px + 5, py - 4); ctx.stroke();
+      }
+      const tx = x + 76;
+      this.text(def.name, tx, ry + 30, { size: 20, bold: true, color: q.done ? "#9aa7c8" : "#fff3c8" });
+      this.text(q.done ? "COMPLETE" : "ACTIVE", x + 28 + cardW - 20, ry + 30,
+        { size: 14, align: "right", color: q.done ? "#5cd06a" : "#ffd479" });
+      this.text(def.desc, tx, ry + 56, { size: 14, color: q.done ? "#8893b4" : "#cfd6ff" });
+      ry += cardH + 14;
+    });
+
+    this.text("ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
   /* ----------------------------- skills screen --------------------------- */
   skillLayout() {
     const W = this.cv.width, H = this.cv.height;
     const x = 40, y = 36, w = W - 80, h = H - 110;
-    const listX = x + 36, listY = y + 130, rowH = 70;
-    const rows = SKILLS.map((s, i) => ({ skill: s, x: listX, y: listY + i * rowH, w: 380, h: 58 }));
+    const listX = x + 36, listY = y + 130;
+    // shrink the row pitch if the catalog has grown past what 70px rows would fit
+    const rowH = Math.max(52, Math.min(70, Math.floor((y + h - 40 - listY) / SKILLS.length)));
+    const rows = SKILLS.map((s, i) => ({ skill: s, x: listX, y: listY + i * rowH, w: 380, h: rowH - 12 }));
     const n = skillSlots(this.player.lv);
     const slotX = x + w - 320, slotY = y + 138, ss = 74, gap = 22;
     const slots = [];
@@ -732,7 +845,7 @@ Object.assign(Game.prototype, {
   drawMainMenu() {
     const W = this.cv.width, p = this.player;
     // command list (top-right)
-    const cw = 200, cx = W - cw - 24, cy = 24, rh = 38;
+    const cw = 240, cx = W - cw - 24, cy = 24, rh = 40;
     this.drawWindow(cx, cy, cw, 24 + MAIN_MENU.length * rh);
     MAIN_MENU.forEach((o, i) => {
       const y = cy + 34 + i * rh, sel = i === this.ui.sel;
