@@ -22,10 +22,10 @@ Object.assign(Game.prototype, {
         skills: Array.isArray(am.skills) ? am.skills.slice() : [],
         hurtT: 0, ko: false, lunge: 0,
       } : null,
-      heroCmds: ["Attack", "Skill", "Defend", "Item", "Run"],
-      allyCmds: ["Attack", "Skill", "Defend", "Item", "Run"],
+      heroCmds: ["Attack", "Skill", "Defend", "Run"],
+      allyCmds: ["Attack", "Skill", "Defend", "Run"],
       actor: "hero",
-      cmds: ["Attack", "Skill", "Defend", "Item", "Run"], sel: 0,
+      cmds: ["Attack", "Skill", "Defend", "Run"], sel: 0,
       phase: "intro", step: "", timer: 1100, msg: cfg.intro,
       heroKO: false,
       heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0, enemySkill: null, skillFlash: null,
@@ -61,6 +61,7 @@ Object.assign(Game.prototype, {
       if (b.allyShieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.allyShieldBuff = false; }
       else if (b.allyDefending) dmg = Math.max(1, Math.floor(dmg / 2));
       b.ally.hp = Math.max(0, b.ally.hp - dmg); b.ally.hurtT = 400;
+      this.audio.play(c.crit ? "crit" : "hurt");
       this.addFloat("ally", dmg, c.crit ? "#ff3030" : "#ff8a8a");
       b.enemy.meter += Math.ceil(dmg * 0.5);          // dealing damage also charges its meter
       if (b.ally.hp <= 0) { b.ally.ko = true; this.battleMsg(b.ally.name + " is knocked out!"); }
@@ -73,6 +74,7 @@ Object.assign(Game.prototype, {
     if (b.shieldBuff) { dmg = Math.max(1, Math.floor(dmg * 0.3)); b.shieldBuff = false; }
     else if (b.defending) dmg = Math.max(1, Math.floor(dmg / 2));
     this.player.hp = Math.max(0, this.player.hp - dmg); b.heroHurt = 400;
+    this.audio.play(c.crit ? "crit" : "hurt");
     this.addFloat("hero", dmg, c.crit ? "#ff3030" : "#ff8a8a");
     b.enemy.meter += Math.ceil(dmg * 0.5);            // dealing damage also charges its meter
     // a fallen hero is only "down", not game over, while Elara still stands
@@ -199,6 +201,7 @@ Object.assign(Game.prototype, {
     } else {
       this.stats.lastKiller = b.enemy.name;
       b.phase = "lose"; b.msg = this.player.name + " has fallen...  (ENTER)";
+      this.audio.play("gameover");
     }
   },
   endBattle(result) {
@@ -271,7 +274,13 @@ Object.assign(Game.prototype, {
   battleKey(key) {
     const b = this.battle; if (!b) return;
     const enter = key === "enter" || key === " ";
-    if (b.phase === "victory") { if (enter) (b.reward.leveled ? (b.phase = "levelup", b.levelT = 0, b.levelIdx = 0) : this.endBattle("win")); return; }
+    if (b.phase === "victory") {
+      if (enter) {
+        if (b.reward.leveled) { b.phase = "levelup"; b.levelT = 0; b.levelIdx = 0; this.audio.play("levelup"); }
+        else this.endBattle("win");
+      }
+      return;
+    }
     if (b.phase === "levelup") {
       if (enter) {
         b.levelIdx++;
@@ -284,16 +293,16 @@ Object.assign(Game.prototype, {
 
     if (b.phase === "submenu") {
       const list = b.sub.list, n = list.length;
-      if (key === "escape") { b.phase = "menu"; b.sub = null; }
-      else if (key === "arrowup" || key === "w") b.sub.sel = (b.sub.sel + n - 1) % n;
-      else if (key === "arrowdown" || key === "s") b.sub.sel = (b.sub.sel + 1) % n;
+      if (key === "escape") { b.phase = "menu"; b.sub = null; this.audio.play("cancel"); }
+      else if (key === "arrowup" || key === "w") { b.sub.sel = (b.sub.sel + n - 1) % n; this.audio.play("move"); }
+      else if (key === "arrowdown" || key === "s") { b.sub.sel = (b.sub.sel + 1) % n; this.audio.play("move"); }
       else if (enter) this.confirmSub();
       return;
     }
     if (b.phase !== "menu") return;
     const n = b.cmds.length;
-    if (key === "arrowup" || key === "w") b.sel = (b.sel + n - 1) % n;
-    else if (key === "arrowdown" || key === "s") b.sel = (b.sel + 1) % n;
+    if (key === "arrowup" || key === "w") { b.sel = (b.sel + n - 1) % n; this.audio.play("move"); }
+    else if (key === "arrowdown" || key === "s") { b.sel = (b.sel + 1) % n; this.audio.play("move"); }
     else if (enter) this.chooseCommand(b.cmds[b.sel]);
   },
 
@@ -322,11 +331,6 @@ Object.assign(Game.prototype, {
       if (!eq.length) { this.battleMsg("No skills equipped! (set them in menu after battle)"); return; }
       b.phase = "submenu"; b.sub = { type: "skill", sel: 0, list: eq };
     }
-    else if (cmd === "Item") {
-      const list = this.items.filter(i => i.qty > 0 && (i.name === "Potion" || i.name === "Bread"));
-      if (!list.length) { this.battleMsg("No usable items!"); return; }
-      b.phase = "submenu"; b.sub = { type: "item", sel: 0, list };
-    }
     else if (cmd === "Run") {
       if (Math.random() < 0.6) { this.battleMsg("Got away safely!"); b.phase = "flee"; b.timer = 900; }
       else { this.battleMsg("Couldn't escape!"); b.phase = "enemy_pre"; b.timer = 750; }
@@ -338,23 +342,6 @@ Object.assign(Game.prototype, {
     const ally = b.actor === "ally";
     const after = () => ally ? this.afterAllyAction() : this.afterHeroAction();
 
-    if (b.sub.type === "item") {
-      const it = b.sub.list[b.sub.sel];
-      const amt = it.name === "Potion" ? 25 : 8;
-      it.qty--;
-      if (ally) {
-        const heal = Math.min(amt, b.ally.maxhp - b.ally.hp); b.ally.hp += heal;
-        this.addFloat("ally", "+" + heal, "#9cf0a0");
-        this.battleMsg(b.ally.name + " uses " + it.name + ". +" + heal + " HP");
-      } else {
-        const heal = Math.min(amt, p.maxhp - p.hp); p.hp += heal;
-        this.addFloat("hero", "+" + heal, "#9cf0a0");
-        this.battleMsg(p.name + " uses " + it.name + ". +" + heal + " HP");
-      }
-      b.sub = null;
-      after();
-      return;
-    }
     // skill
     const sk = SKILL_BY_ID[b.sub.list[b.sub.sel]];
     const caster = ally ? b.ally : p;
@@ -363,6 +350,7 @@ Object.assign(Game.prototype, {
     this.stats.skillUses[sk.id] = (this.stats.skillUses[sk.id] || 0) + 1;
     if (sk.kind === "shield") {
       if (ally) { b.allyShieldBuff = true; } else { b.shieldBuff = true; }
+      this.audio.play("confirm");
       this.battleMsg(caster.name + " raises the Blue Shield!");
       after();
     } else { // heal / fire / bolt — play a cast animation, resolve at the impact frame
@@ -372,6 +360,7 @@ Object.assign(Game.prototype, {
         b.phase = "hero_skill"; b.step = "cast"; b.timer = 520; b.heroLunge = 0;
       }
       b.fx = { kind: sk.id, t: 0 };   // FX keyed on the specific skill, not just its kind
+      this.audio.play(sk.kind === "heal" ? "heal" : sk.kind);   // 'heal' | 'fire' | 'bolt'
       this.battleMsg(caster.name + (sk.kind === "heal" ? " casts " : " unleashes ") + sk.name + "!");
     }
   },
@@ -398,6 +387,7 @@ Object.assign(Game.prototype, {
             const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
             this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
+            this.audio.play(c.crit ? "crit" : "hit");
             this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : "#ffffff");
             this.battleMsg(c.crit ? this.player.name + " lands a CRITICAL hit for " + dmg + "!"
                                   : this.player.name + " strikes for " + dmg + "!");
@@ -440,6 +430,7 @@ Object.assign(Game.prototype, {
             const c = this.applyCrit(dmg, "player"); dmg = c.dmg;
             b.enemy.hp = Math.max(0, b.enemy.hp - dmg); b.enemy.hurtT = 380;
             this.stats.dmgDealt += dmg; b.enemy.meter += dmg;   // taking hits charges its skill meter
+            this.audio.play(c.crit ? "crit" : "hit");
             this.addFloat("enemy", dmg, c.crit ? "#ffd24a" : "#ffd0a0");
             this.battleMsg(c.crit ? b.ally.name + " lands a CRITICAL hit for " + dmg + "!"
                                   : b.ally.name + " hits for " + dmg + "!");
@@ -513,7 +504,7 @@ Object.assign(Game.prototype, {
         break;
       case "enemy_die":
         b.enemy.deathT += dt;
-        if (b.timer <= 0) { this.grantRewards(); b.phase = "victory"; b.victoryT = 0; b.msg = ""; }
+        if (b.timer <= 0) { this.grantRewards(); b.phase = "victory"; b.victoryT = 0; b.msg = ""; this.audio.play("victory"); }
         break;
       case "flee": if (b.timer <= 0) this.endBattle("flee"); break;
     }
@@ -801,19 +792,13 @@ Object.assign(Game.prototype, {
     const cw = 320, bh = 244, cx = W - cw - 40, rh = 30, cyy = H - bh - 24;
     const caster = b.actor === "ally" ? b.ally : this.player;
     this.drawWindow(cx, cyy, cw, bh);
-    this.text((sub.type === "skill" ? "SKILLS" : "ITEMS") + "  ·  " + caster.name,
-      cx + 20, cyy + 30, { size: 15, color: "#9fb0e8" });
+    this.text("SKILLS  ·  " + caster.name, cx + 20, cyy + 30, { size: 15, color: "#9fb0e8" });
     sub.list.forEach((entry, i) => {
       const yy = cyy + 70 + i * rh, sel = i === sub.sel;
       if (sel) this.cursor(cx + 26, yy - 8);
-      if (sub.type === "skill") {
-        const sk = SKILL_BY_ID[entry], can = caster.mp >= sk.mp;
-        this.text(sk.name, cx + 52, yy, { size: 21, color: sel ? "#ffe9a0" : (can ? "#dfe4ff" : "#8890b0"), bold: sel });
-        this.text(sk.mp + " MP", cx + cw - 18, yy, { size: 16, align: "right", color: can ? "#9fd8ff" : "#8890b0" });
-      } else {
-        this.text(entry.name, cx + 52, yy, { size: 21, color: sel ? "#ffe9a0" : "#dfe4ff", bold: sel });
-        this.text("x" + entry.qty, cx + cw - 18, yy, { size: 16, align: "right", color: "#cfd6ff" });
-      }
+      const sk = SKILL_BY_ID[entry], can = caster.mp >= sk.mp;
+      this.text(sk.name, cx + 52, yy, { size: 21, color: sel ? "#ffe9a0" : (can ? "#dfe4ff" : "#8890b0"), bold: sel });
+      this.text(sk.mp + " MP", cx + cw - 18, yy, { size: 16, align: "right", color: can ? "#9fd8ff" : "#8890b0" });
     });
     this.text("ESC  back", cx + cw - 18, cyy + bh - 16, { size: 14, align: "right", color: "rgba(220,228,255,.6)" });
   },

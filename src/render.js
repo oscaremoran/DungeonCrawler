@@ -556,7 +556,6 @@ Object.assign(Game.prototype, {
     const ui = this.ui;
     if (ui.screen === "main") this.drawMainMenu();
     else if (ui.screen === "status") this.drawStatusScreen();
-    else if (ui.screen === "items") this.drawItemsScreen();
     else if (ui.screen === "skills") this.drawSkillsScreen();
     else if (ui.screen === "equip") this.drawEquipScreen();
     else if (ui.screen === "quests") this.drawQuestsScreen();
@@ -634,10 +633,10 @@ Object.assign(Game.prototype, {
     const hit = r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
     while (c.skills.length < L.n) c.skills.push(null);
     c.skills.length = L.n;
-    // an item known to the catalog (level-unlocked OR purchased on Garran)
+    // a skill is usable if purchased, or (for non-shop skills) level-unlocked
     const known = id => {
       const sk = SKILL_BY_ID[id]; if (!sk) return false;
-      return p.lv >= sk.unlock || p.boughtSkills.includes(id);
+      return p.boughtSkills.includes(id) || (!sk.shop && p.lv >= sk.unlock);
     };
     if (type === "down") {
       for (const r of L.rows) if (hit(r) && known(r.skill.id)) { ui.drag = { id: r.skill.id, from: "list", mx, my }; return; }
@@ -668,14 +667,16 @@ Object.assign(Game.prototype, {
 
     // skill list
     for (const r of L.rows) {
-      const s = r.skill, locked = p.lv < s.unlock && !p.boughtSkills.includes(s.id), equipped = c.skills.includes(s.id);
+      const s = r.skill, owned = p.boughtSkills.includes(s.id);
+      const locked = !owned && (s.shop || p.lv < s.unlock), equipped = c.skills.includes(s.id);
+      const source = s.shop ? "Skill Shop" : "Lv " + s.unlock;   // how this skill is obtained
       ctx.globalAlpha = locked ? 0.4 : (ui.drag && ui.drag.id === s.id && ui.drag.from === "list" ? 0.35 : 1);
       ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
       ctx.drawImage(art[s.icon], r.x + 6, r.y + 5, 48, 48);
       this.text(s.name, r.x + 66, r.y + 22, { size: 18, bold: true, color: locked ? "#9aa" : "#eef1ff" });
-      this.text("Lv " + s.unlock + "   ·   " + s.mp + " MP", r.x + 66, r.y + 40, { size: 13, color: locked ? "#889" : "#bcd0f0" });
+      this.text(source + "   ·   " + s.mp + " MP", r.x + 66, r.y + 40, { size: 13, color: locked ? "#889" : "#bcd0f0" });
       this.text(s.desc, r.x + 66, r.y + 56, { size: 13, color: locked ? "#778" : "#aeb8d8" });
-      if (locked) this.text("LOCKED", r.x + r.w - 14, r.y + 30, { size: 14, align: "right", color: "#e88" });
+      if (locked) this.text(s.shop ? "SHOP" : "LOCKED", r.x + r.w - 14, r.y + 30, { size: 14, align: "right", color: s.shop ? "#ffd479" : "#e88" });
       else if (equipped) this.text("equipped", r.x + r.w - 14, r.y + 30, { size: 13, align: "right", color: "#9cf0a0" });
       ctx.globalAlpha = 1;
     }
@@ -946,28 +947,6 @@ Object.assign(Game.prototype, {
       this.text("(traveling alone)", colX, py0 + 22, { size: 15, color: "#8890b0" });
     }
     this.text("ESC  back", W / 2, H - 36, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
-  },
-
-  drawItemsScreen() {
-    const W = this.cv.width, H = this.cv.height;
-    const x = 40, y = 36, w = W - 80, h = H - 110;
-    this.drawWindow(x, y, w, h);
-    this.text("ITEMS", x + 28, y + 44, { size: 24, bold: true, color: "#ffe9a0" });
-    const listY = y + 70, rh = 40;
-    this.items.forEach((it, i) => {
-      const ry = listY + i * rh, sel = i === this.ui.sel;
-      if (sel) this.cursor(x + 34, ry - 6);
-      this.text(it.name, x + 54, ry, { size: 19, color: sel ? "#ffe9a0" : "#e4e8ff", bold: sel });
-      this.text(": " + it.qty, x + 300, ry, { size: 19, align: "right", color: "#cfd6ff" });
-    });
-    if (!this.items.length) this.text("(empty)", x + 54, listY, { size: 18, color: "#9aa" });
-    // description strip
-    const dY = y + h - 60;
-    this.ctx.strokeStyle = "rgba(120,140,210,0.5)"; this.ctx.lineWidth = 1;
-    this.ctx.beginPath(); this.ctx.moveTo(x + 20, dY - 14); this.ctx.lineTo(x + w - 20, dY - 14); this.ctx.stroke();
-    const cur = this.items[this.ui.sel];
-    if (cur) this.text(cur.desc, x + 28, dY + 12, { size: 17, color: "#dfe4ff" });
-    this.text("↑↓ select   ESC back", W / 2, H - 36, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
   drawPortrait(x, y, h, key) {

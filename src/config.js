@@ -75,11 +75,11 @@ ASSETS.you_died = "assets/you_died.png";
 /* learnable skills (drag into slots; cost MP in battle) */
 const SKILLS = [
   { id: "heal",   name: "Healing",        unlock: 3, mp: 2, icon: "skill_heal",   kind: "heal",   power: 32, desc: "Restore HP to the hero." },
-  { id: "mend",   name: "Mend",           unlock: 2, mp: 1, icon: "skill_mend",   kind: "heal",   power: 18, desc: "Restore a little HP." },
-  { id: "ember",  name: "Ember",          unlock: 2, mp: 3, icon: "skill_ember",  kind: "fire",   power: 1.2, desc: "A quick burst of flame." },
+  { id: "mend",   name: "Mend",           shop: true, mp: 1, icon: "skill_mend",   kind: "heal",   power: 18, desc: "Restore a little HP." },
+  { id: "ember",  name: "Ember",          shop: true, mp: 3, icon: "skill_ember",  kind: "fire",   power: 1.2, desc: "A quick burst of flame." },
   { id: "fire",   name: "Flaming Sword",  unlock: 4, mp: 5, icon: "skill_fire",   kind: "fire",   power: 1.7, desc: "Fire damage to one foe." },
-  { id: "inferno", name: "Inferno",       unlock: 8, mp: 9, icon: "skill_inferno", kind: "fire",  power: 2.6, desc: "A roaring blaze engulfs one foe." },
-  { id: "jolt",   name: "Static Jolt",    unlock: 4, mp: 4, icon: "skill_jolt",   kind: "bolt",   power: 1.5, desc: "A crackling jolt of lightning." },
+  { id: "inferno", name: "Inferno",       shop: true, mp: 9, icon: "skill_inferno", kind: "fire",  power: 2.6, desc: "A roaring blaze engulfs one foe." },
+  { id: "jolt",   name: "Static Jolt",    shop: true, mp: 4, icon: "skill_jolt",   kind: "bolt",   power: 1.5, desc: "A crackling jolt of lightning." },
   { id: "bolt",   name: "Lightning Bolt", unlock: 9, mp: 8, icon: "skill_bolt",   kind: "bolt",   power: 2.3, desc: "Heavy lightning damage to one foe." },
   { id: "shield", name: "Blue Shield",    unlock: 6, mp: 4, icon: "skill_shield", kind: "shield", power: 0,   desc: "Sharply raise defense for a turn." },
 ];
@@ -211,7 +211,7 @@ const GAME_TITLE = "Game";
 const GAME_SUBTITLE = "";
 const AREA_NAME = "Greenwood Forest";
 
-const MAIN_MENU = ["Items", "Skills", "Equip", "Status", "Quests", "Save"];
+const MAIN_MENU = ["Skills", "Equip", "Status", "Quests", "Save"];
 
 /* quest log entries — added/completed as the story progresses (see game.js). */
 const QUESTS = {

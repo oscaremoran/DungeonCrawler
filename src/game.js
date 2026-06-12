@@ -2,6 +2,7 @@ class Game {
   constructor(canvas, art) {
     this.cv = canvas; this.ctx = canvas.getContext("2d");
     this.art = art;
+    this.audio = new GameAudio();   // procedural sound (lazily unlocked on first input)
 
     this.newGame();             // build the world + a fresh hero (re-run by New Game)
 
@@ -20,6 +21,11 @@ class Game {
     this.keys = {};
     addEventListener("keydown", e => {
       const key = e.key.toLowerCase();
+      this.audio.unlock();                // resume audio on the first gesture
+      // N toggles sound — but not while typing a name (where 'n' is a letter)
+      if (key === "n" && this.state !== "name" && !this.naming) {
+        const m = this.audio.toggleMute(); this.flash = { text: m ? "Sound off" : "Sound on", t: 1000 }; return;
+      }
       if (["arrowup","arrowdown","arrowleft","arrowright"," ","enter","backspace","tab"].includes(key))
         e.preventDefault();
       if (!e.repeat) this.onKey(key);     // discrete (menu) actions
@@ -32,7 +38,7 @@ class Game {
       const r = this.cv.getBoundingClientRect();
       return [(e.clientX - r.left) * (this.cv.width / r.width), (e.clientY - r.top) * (this.cv.height / r.height)];
     };
-    this.cv.addEventListener("mousedown", e => { const [x, y] = toCanvas(e); this.onMouse("down", x, y); });
+    this.cv.addEventListener("mousedown", e => { this.audio.unlock(); const [x, y] = toCanvas(e); this.onMouse("down", x, y); });
     addEventListener("mousemove", e => { const [x, y] = toCanvas(e); this.onMouse("move", x, y); });
     addEventListener("mouseup", e => { const [x, y] = toCanvas(e); this.onMouse("up", x, y); });
 
@@ -85,12 +91,11 @@ class Game {
       equipOwned: ["wood_sword", "cloak"],          // gear in the pack
       equip: { weapon: "wood_sword", armor: "cloak" },  // gear currently worn
     };
-    this.items = [];         // the hero starts empty-handed
     this.shop = null;        // null | { id, sel } — open storefront
     this.naming = null;      // null | { title, buf, onDone } — mid-game name-entry box
     this.trail = [];         // recent player poses, for party followers
 
-    this.ui = null;          // null | { screen: 'main'|'status'|'items', sel }
+    this.ui = null;          // null | { screen: 'main'|'status'|'skills'|'equip'|'quests', sel }
     this.dialogue = null;    // null | { name, lines, page, portrait, onClose }
     this.queuedDialogue = null; // shown once the next fade-transition settles
     this.introShown = false;
@@ -126,7 +131,7 @@ class Game {
     if (this.cheated || this.exiting) return;
     if (this.state === "title") {
       if (key === "arrowup" || key === "w" || key === "arrowdown" || key === "s")
-        this.titleSel ^= 1;                       // toggle the two options
+        { this.titleSel ^= 1; this.audio.play("move"); }            // toggle the two options
       else if (key === "enter" || key === " ") {
         if (this.titleSel === 1) {                  // Continue -> save-picker
           if (this.hasSave()) { this.saveSel = 0; this.beginTransition("saveselect"); }
@@ -197,7 +202,6 @@ class Game {
       }
       if (this.ui) { this.menuKey(key); return; }  // navigate the menu
       if (key === "escape" || key === "m") this.ui = { screen: "main", sel: 0 };
-      else if (key === "i") this.ui = { screen: "items", sel: 0 };
       else if (key === "enter" || key === " ") {
         if (this.tryTalkNPC()) return;
         if (this.tryReadSign()) return;
@@ -225,12 +229,11 @@ class Game {
 
     if (ui.screen === "main") {
       const n = MAIN_MENU.length;
-      if (key === "arrowup" || key === "w") ui.sel = (ui.sel + n - 1) % n;
-      else if (key === "arrowdown" || key === "s") ui.sel = (ui.sel + 1) % n;
+      if (key === "arrowup" || key === "w") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
+      else if (key === "arrowdown" || key === "s") { ui.sel = (ui.sel + 1) % n; this.audio.play("move"); }
       else if (key === "enter" || key === " ") {
         const pick = MAIN_MENU[ui.sel];
-        if (pick === "Items") this.ui = { screen: "items", sel: 0 };
-        else if (pick === "Status") this.ui = { screen: "status", sel: 0 };
+        if (pick === "Status") this.ui = { screen: "status", sel: 0 };
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
         else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
         else if (pick === "Quests") this.ui = { screen: "quests", sel: 0 };
@@ -241,13 +244,6 @@ class Game {
         }
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
-    } else if (ui.screen === "items") {
-      const n = this.items.length;
-      if (n) {
-        if (key === "arrowup" || key === "w") ui.sel = (ui.sel + n - 1) % n;
-        else if (key === "arrowdown" || key === "s") ui.sel = (ui.sel + 1) % n;
-      }
-      if (key === "enter" || key === " ") this.flash = { text: "Can't use that here.", t: 1200 };
     }
   }
 
@@ -259,6 +255,7 @@ class Game {
       const cx = chest.tx * TILE + TILE / 2, cy = (chest.ty + 0.5) * TILE;
       if (Math.hypot(p.x - cx, p.y - cy) > TILE * 1.7) continue;
       chest.opened = true;
+      this.audio.play("chest");
       if (chest.gold) {                                // a pouch of coin
         p.gold += chest.gold;
         this.dialogue = { name: p.name, page: 0, lines: [
@@ -371,6 +368,7 @@ class Game {
   /* push a stacked toast (quest updates etc.) — these queue rather than clobber,
      so several can fire on the same beat (e.g. two quests complete at once). */
   pushNotif(text, color) {
+    if (this.audio) this.audio.play("quest");
     this.notifs.push({ text, color: color || "#ffe9b0", t: 2600, max: 2600 });
     if (this.notifs.length > 4) this.notifs.shift();   // cap the stack
   }
@@ -535,9 +533,10 @@ class Game {
   }
   buyWare(w) {
     const p = this.player;
-    if (this.ownsWare(w)) { this.flash = { text: "You already have that.", t: 1200 }; return; }
-    if (p.gold < w.price) { this.flash = { text: "Not enough gold.", t: 1200 }; return; }
+    if (this.ownsWare(w)) { this.flash = { text: "You already have that.", t: 1200 }; this.audio.play("cancel"); return; }
+    if (p.gold < w.price) { this.flash = { text: "Not enough gold.", t: 1200 }; this.audio.play("cancel"); return; }
     p.gold -= w.price;
+    this.audio.play("buy");
     if (w.type === "skill") {
       p.boughtSkills.push(w.id);
       this.flash = { text: "Learned " + SKILL_BY_ID[w.id].name + "!", t: 1600 };
@@ -672,7 +671,6 @@ class Game {
       chestsOpened: Object.fromEntries(Object.keys(this.areas)
         .filter(id => this.areas[id].chests)
         .map(id => [id, this.areas[id].chests.map(c => !!c.opened)])),
-      items: this.items.map(i => ({ name: i.name, qty: i.qty })),
       area: this.area, dead, difficulty: this.difficulty,
       mercSceneDone: !!this.mercSceneDone, mercDefeated: !!this.mercDefeated,
       quests: this.quests.map(q => ({ id: q.id, done: !!q.done })),
@@ -721,7 +719,6 @@ class Game {
     } else if (this.areas.forest.chests && this.areas.forest.chests[0]) {
       this.areas.forest.chests[0].opened = !!data.chestOpened;   // back-compat: v3 single chest
     }
-    for (const it of this.items) { const s = (data.items || []).find(i => i.name === it.name); it.qty = s ? s.qty : it.qty; }
     const dead = data.dead || { forest: data.dead };  // tolerate v1 saves (flat array)
     for (const id in this.areas)
       this.areas[id].enemies.forEach((e, i) => { e.alive = !(dead[id] && dead[id][i]); });
@@ -913,7 +910,7 @@ class Game {
         }
       } else if (!(this.encounterCD > 0) && d < TILE * 1.7) {
         this.encounter = { phase: "roar", t: 0, target: e };
-        e.anim = "alert"; e.animT = 0; return;
+        e.anim = "alert"; e.animT = 0; this.audio.play("encounter"); return;
       }
     }
   }
@@ -923,7 +920,7 @@ class Game {
     const target = this.prompt.target; this.prompt = null;
     if (!yes) { this.bossTalkCD = 1200; return; }     // back off; re-ask shortly
     this.encounter = { phase: "roar", t: 0, target };
-    target.anim = "alert"; target.animT = 0;
+    target.anim = "alert"; target.animT = 0; this.audio.play("encounter");
   }
 
   /* begin a fade-out; enterArea swaps the room once the screen is black */
@@ -978,9 +975,20 @@ class Game {
   /* Slot count for a character (hero or ally) — driven off the hero's level. */
   slotCountFor() { return Math.floor(this.player.lv / 3); }
 
+  /* pick the music track that matches the current screen (no-op if unchanged) */
+  updateMusic() {
+    const s = this.state;
+    const track = s === "battle" ? "battle"
+      : s === "overworld" ? "overworld"
+      : (s === "title" || s === "difficulty" || s === "name" || s === "saveselect") ? "title"
+      : null;
+    this.audio.playMusic(track);
+  }
+
   loop(t) {
     const dt = Math.min(50, t - this.last); this.last = t;
     this.update(dt);
+    this.updateMusic();
     this.render();
     requestAnimationFrame(tt => this.loop(tt));
   }

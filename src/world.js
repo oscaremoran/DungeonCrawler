@@ -73,10 +73,6 @@ function buildWorld(seed) {
     { id: 6, type: "lizard", tx: midX - 9,  ty: 23 },
     { id: 7, type: "lizard", tx: midX + 5,  ty: 24 },
     { id: 8, type: "lizard", tx: midX + 13, ty: 25 },
-    // gray wolves prowling the clearing
-    { id: 9,  type: "wolf", tx: midX - 3,  ty: 10 },
-    { id: 10, type: "wolf", tx: midX + 4,  ty: 16 },
-    { id: 11, type: "wolf", tx: midX - 8,  ty: 21 },
   ];
   /* a treasure chest sitting in the open at the north end of the central trail */
   const chests = [{ tx: trailTopX, ty: 6, opened: false, item: "leather_tunic" }];
