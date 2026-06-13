@@ -27,7 +27,7 @@ class GameAudio {
     this.ctx = new AC();
     this.master = this.ctx.createGain();   this.master.gain.value = 0.9; this.master.connect(this.ctx.destination);
     this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = 0.5; this.musicGain.connect(this.master);
-    this.sfxGain = this.ctx.createGain();   this.sfxGain.gain.value = 0.9; this.sfxGain.connect(this.master);
+    this.sfxGain = this.ctx.createGain();   this.sfxGain.gain.value = 1.45; this.sfxGain.connect(this.master);
     // music ambience: a feedback delay send gives the melodic voices some space
     this.musicDelay = this.ctx.createDelay(1.0); this.musicDelay.delayTime.value = 0.27;
     const fb = this.ctx.createGain(); fb.gain.value = 0.30;
@@ -79,6 +79,26 @@ class GameAudio {
     if (!this.ctx) return;
     notes.forEach((m, i) => setTimeout(() => this._tone(type, this.midi(m), this.midi(m), step * 1.6, peak, dest), i * step * 1000));
   }
+  // filtered noise whose filter frequency sweeps f0 -> f1 over the sound (whooshes)
+  _noiseSweep(dur, peak, type, f0, f1, q, dest) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, n = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const f = this.ctx.createBiquadFilter(); f.type = type || "bandpass";
+    f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    if (q) f.Q.value = q;
+    const g = this.ctx.createGain(); this._env(g, t, dur, peak);
+    src.connect(f); f.connect(g); g.connect(dest || this.sfxGain);
+    src.start(t); src.stop(t + dur + 0.02);
+  }
+  // a simultaneous chord stab from a list of midi notes
+  _chord(notes, type, dur, peak, dest) {
+    for (const m of notes) this._tone(type, this.midi(m), this.midi(m), dur, peak, dest);
+  }
+  // run fn after ms (for multi-stage one-shots like thunderclaps / stingers)
+  _at(ms, fn) { setTimeout(() => { if (this.ctx && !this.muted) fn(); }, ms); }
 
   /* named one-shots */
   play(name) {
@@ -87,13 +107,31 @@ class GameAudio {
       case "move":     this._tone("square", 480, 520, 0.05, 0.10); break;
       case "confirm":  this._tone("square", 540, 760, 0.10, 0.12); break;
       case "cancel":   this._tone("square", 420, 240, 0.12, 0.11); break;
-      case "hit":      this._noise(0.10, 0.20, "lowpass", 1400); this._tone("sine", 150, 90, 0.12, 0.22); break;
-      case "crit":     this._noise(0.14, 0.28, "highpass", 800); this._tone("square", 900, 1600, 0.16, 0.16); this._tone("sine", 180, 110, 0.16, 0.22); break;
-      case "hurt":     this._noise(0.18, 0.22, "lowpass", 600); this._tone("sawtooth", 110, 70, 0.18, 0.16); break;
-      case "fire":     this._noise(0.40, 0.18, "bandpass", 1100); this._tone("sawtooth", 200, 900, 0.40, 0.10); break;
-      case "bolt":     this._tone("square", 1300, 200, 0.22, 0.16); this._noise(0.18, 0.18, "highpass", 2000); break;
-      case "heal":     this._arp([72, 76, 79, 84], 0.07, "triangle", 0.14); break;
-      case "encounter":this._noise(0.5, 0.22, "lowpass", 900); this._tone("sawtooth", 300, 60, 0.5, 0.12); break;
+      // physical hit: a sharp transient crack + a punchy body thump + snap
+      case "hit":      this._noise(0.06, 0.40, "highpass", 2600); this._tone("sine", 220, 70, 0.18, 0.42); this._tone("square", 340, 130, 0.07, 0.14); break;
+      // critical: harder impact, an upward metallic zing and a bright ring
+      case "crit":     this._noise(0.10, 0.46, "highpass", 1800); this._tone("sine", 260, 64, 0.24, 0.46); this._tone("square", 900, 1900, 0.12, 0.20); this._chord([76, 83, 88], "triangle", 0.24, 0.13); break;
+      // hero hurt: a pained downward groan under a dull noise thud
+      case "hurt":     this._noise(0.18, 0.32, "lowpass", 700); this._tone("sawtooth", 170, 58, 0.24, 0.24); this._tone("square", 120, 78, 0.12, 0.14); break;
+      // fire spell: a rising bandpass whoosh, sawtooth body, crackle + low boom
+      case "fire":     this._noiseSweep(0.55, 0.26, "bandpass", 500, 2800, 6); this._tone("sawtooth", 120, 460, 0.55, 0.14); this._noise(0.22, 0.22, "highpass", 3500); this._tone("sine", 90, 48, 0.5, 0.22); this._at(120, () => this._noise(0.18, 0.14, "highpass", 4500)); break;
+      // lightning: a stabbing zap, bright crackle, and a delayed second strike
+      case "bolt":     this._tone("square", 1800, 170, 0.20, 0.22); this._noise(0.11, 0.36, "highpass", 4000); this._tone("sawtooth", 2700, 300, 0.11, 0.14); this._at(110, () => { this._tone("square", 1300, 140, 0.16, 0.18); this._noise(0.08, 0.26, "highpass", 6000); }); this._at(230, () => this._noise(0.06, 0.16, "highpass", 7000)); break;
+      // heal: a rising shimmer with a sparkle layer and a soft pad swell
+      case "heal":     this._arp([72, 76, 79, 84], 0.06, "triangle", 0.16); this._arp([84, 88, 91], 0.05, "sine", 0.10); this._tone("sine", 523, 523, 0.55, 0.08); break;
+      // battle start: a long building stinger that climaxes into the battle theme —
+      // opening boom + alarm stab, accelerating taiko hits, a rising riser/drone,
+      // then a big crash + minor chord landing right as the battle music begins
+      case "encounter":
+        this._tone("sine", 130, 46, 0.7, 0.34);
+        this._noiseSweep(0.7, 0.26, "lowpass", 6000, 280, 1);
+        this._chord([45, 48, 52], "sawtooth", 0.6, 0.15);
+        [0, 320, 600, 840, 1040, 1200, 1320, 1420, 1510].forEach((ms, i) =>
+          this._at(ms, () => this._tone("sine", 150, 58, 0.16, 0.20 + i * 0.016)));
+        this._at(520, () => this._noiseSweep(1.1, 0.22, "bandpass", 380, 4200, 4));
+        this._at(720, () => this._tone("sawtooth", 220, 680, 0.95, 0.14));
+        this._at(1640, () => { this._noise(0.45, 0.40, "highpass", 5000); this._tone("sine", 165, 48, 0.55, 0.40); this._chord([45, 52, 57, 64], "sawtooth", 0.5, 0.18); });
+        break;
       case "victory":  this._arp([60, 64, 67, 72], 0.10, "square", 0.14); break;
       case "levelup":  this._arp([72, 76, 79, 84, 88], 0.08, "triangle", 0.14); break;
       case "gameover": this._arp([67, 63, 60, 55], 0.18, "sawtooth", 0.14); break;
@@ -111,40 +149,54 @@ class GameAudio {
   // `drums` is a string per step using k(ick) s(nare) h(at) — '.' is a rest.
   _tracks() {
     return {
-      // upbeat, catchy main-theme: bouncy hook over a C–G–Am–F groove + beat
+      // foreboding main-theme: slow, dark Am–F–Dm–E with a sparse low melody,
+      // sustained pads and an ominous heartbeat kick
       title: {
-        stepDur: 0.21, type: "triangle", bassType: "triangle", vol: 0.15, bvol: 0.12,
-        lead: [79, 76, 72, 76, 79, 84, 79, 76, 77, 74, 71, 74, 77, 76, 74, 72],
-        bass: [48, 55, 52, 55, 43, 50, 47, 50, 45, 52, 48, 52, 41, 48, 45, 47],
-        chords: [[48, 52, 55], null, null, null, [43, 47, 50], null, null, null,
-                 [45, 48, 52], null, null, null, [41, 45, 48], null, null, null],
-        chordLen: 4, padVol: 0.05,
-        drums: "k.hsk.hhk.hsks.h",
-        drumVol: 0.6,
-      },
-      // energetic adventure groove for the forest — G major, walking + backbeat
-      overworld: {
-        stepDur: 0.165, type: "triangle", bassType: "triangle", vol: 0.13, bvol: 0.11,
-        lead: [74, 76, 78, 79, 76, 74, 71, 74, 79, 78, 76, 74, 72, 74, 76, null],
-        bass: [43, 50, 47, 50, 38, 45, 42, 45, 40, 47, 43, 47, 36, 43, 40, 43],
-        chords: [[43, 47, 50], null, null, null, [38, 42, 45], null, null, null,
-                 [40, 43, 47], null, null, null, [36, 40, 43], null, null, null],
-        chordLen: 4, padVol: 0.045,
-        drums: "k.hhk.shk.hhkshs",
-        drumVol: 0.7,
-      },
-      // battle: a 32-step two-phrase theme (call/answer) with a drum fill and
-      // an E-major lift for tension; busier and more dynamic than a 1-bar loop
-      battle: {
-        stepDur: 0.13, type: "square", bassType: "sawtooth", vol: 0.12, bvol: 0.13,
-        lead: [69, 71, 72, 71, 69, 67, 65, 67, 69, 72, 76, 72, 71, 69, 67, 69,
-               68, 67, 65, 64, 65, 67, 68, 71, 72, 71, 69, 67, 65, 64, 62, 64],
-        bass: [45, 45, null, 45, 41, 41, null, 41, 40, 40, null, 40, 43, 43, null, 43],
+        stepDur: 0.42, type: "triangle", bassType: "sine", vol: 0.13, bvol: 0.12,
+        lead: [57, null, null, 60, 59, null, 57, null, 56, null, 57, null, null, null, 55, null],
+        bass: [45, null, null, null, 41, null, null, null, 38, null, null, null, 40, null, null, null],
         chords: [[45, 48, 52], null, null, null, [41, 45, 48], null, null, null,
-                 [48, 52, 55], null, null, null, [40, 44, 47], null, null, null],
+                 [38, 41, 45], null, null, null, [40, 44, 47], null, null, null],
+        chordLen: 4, padVol: 0.06,
+        drums: "k.......k.......",
+        drumVol: 0.5,
+      },
+      // forest: slow and uneasy — minor Am–F–G–E, wandering sparse melody, dark
+      // pads and a sparse soft beat
+      overworld: {
+        stepDur: 0.30, type: "triangle", bassType: "sine", vol: 0.12, bvol: 0.11,
+        lead: [null, 69, null, 67, null, 65, null, 64, null, 65, null, 67, null, 64, 62, null],
+        bass: [45, null, null, null, 41, null, null, null, 43, null, null, null, 40, null, null, null],
+        chords: [[45, 48, 52], null, null, null, [41, 45, 48], null, null, null,
+                 [43, 47, 50], null, null, null, [40, 44, 47], null, null, null],
+        chordLen: 4, padVol: 0.05,
+        drums: "h...k...h...s...",
+        drumVol: 0.45,
+      },
+      // battle: aggressive FFVII-boss energy — fast sawtooth lead with chromatic
+      // tension over a relentless octave-pumping bass and a busy double-kick beat
+      battle: {
+        stepDur: 0.11, type: "sawtooth", bassType: "sawtooth", vol: 0.12, bvol: 0.14,
+        lead: [69, 72, 71, 69, 68, 69, 72, 76, 75, 72, 71, 69, 68, 69, 67, 69,
+               76, 75, 76, 79, 76, 75, 76, 72, 71, 72, 71, 68, 69, 67, 65, 69],
+        bass: [45, 57, 45, 57, 45, 57, 45, 57, 43, 55, 44, 56, 45, 57, 45, 57],
+        chords: [[45, 48, 52], null, null, null, [41, 45, 48], null, null, null,
+                 [43, 47, 50], null, null, null, [40, 44, 47], null, null, null],
         chordLen: 4, padVol: 0.04,
-        drums: "k.hsk.hsk.hskshsk.hsk.hskshsksks",
-        drumVol: 0.9,
+        drums: "kkhskhhskkhskshskkhskhhskshsksss",
+        drumVol: 1.0,
+      },
+      // troll boss: slow, heavy and menacing — a lumbering low sawtooth riff with
+      // tritone tension over a stomping E-minor pedal and huge half-time kicks
+      troll: {
+        stepDur: 0.18, type: "sawtooth", bassType: "sawtooth", vol: 0.13, bvol: 0.16,
+        lead: [52, 52, 55, 52, 51, 52, 55, 58, 52, 52, 51, 52, 50, 51, 52, null],
+        bass: [40, 40, 40, 40, 41, 41, 40, 40, 38, 38, 40, 40, 35, 35, 40, 40],
+        chords: [[40, 43, 47], null, null, null, [36, 40, 43], null, null, null,
+                 [33, 36, 40], null, null, null, [35, 39, 42], null, null, null],
+        chordLen: 4, padVol: 0.045,
+        drums: "k...s...k..ks..s",
+        drumVol: 1.0,
       },
     };
   }

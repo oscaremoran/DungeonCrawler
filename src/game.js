@@ -953,7 +953,7 @@ class Game {
         e.phase = "whirl"; e.t = 0;
       }
     } else if (e.phase === "whirl") {
-      if (e.t > 850) { const tgt = e.target; this.encounter = null; this.enterBattle(tgt); }
+      if (e.t > 1050) { const tgt = e.target; this.encounter = null; this.enterBattle(tgt); }
     }
   }
   /* "hero" -> player; "ally" -> party member (or null if no ally). */
@@ -978,7 +978,8 @@ class Game {
   /* pick the music track that matches the current screen (no-op if unchanged) */
   updateMusic() {
     const s = this.state;
-    const track = s === "battle" ? "battle"
+    const boss = this.battle && this.battle.target && this.battle.target.type === "troll";
+    const track = s === "battle" ? (boss ? "troll" : "battle")
       : s === "overworld" ? "overworld"
       : (s === "title" || s === "difficulty" || s === "name" || s === "saveselect") ? "title"
       : null;
