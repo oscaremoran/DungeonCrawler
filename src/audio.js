@@ -111,38 +111,40 @@ class GameAudio {
   // `drums` is a string per step using k(ick) s(nare) h(at) — '.' is a rest.
   _tracks() {
     return {
-      // gentle, spacious main-theme: flowing lead over slow Am–F–C–G pads
+      // upbeat, catchy main-theme: bouncy hook over a C–G–Am–F groove + beat
       title: {
-        stepDur: 0.34, type: "triangle", bassType: "sine", vol: 0.15, bvol: 0.12,
-        lead: [76, null, 72, 74, 76, 79, 76, 74, 72, null, 71, 72, 74, null, 71, 69],
-        bass: [45, null, null, null, 41, null, null, null, 36, null, null, null, 43, null, null, null],
-        chords: [[57, 60, 64], null, null, null, [53, 57, 60], null, null, null,
-                 [48, 52, 55], null, null, null, [55, 59, 62], null, null, null],
+        stepDur: 0.21, type: "triangle", bassType: "triangle", vol: 0.15, bvol: 0.12,
+        lead: [79, 76, 72, 76, 79, 84, 79, 76, 77, 74, 71, 74, 77, 76, 74, 72],
+        bass: [48, 55, 52, 55, 43, 50, 47, 50, 45, 52, 48, 52, 41, 48, 45, 47],
+        chords: [[48, 52, 55], null, null, null, [43, 47, 50], null, null, null,
+                 [45, 48, 52], null, null, null, [41, 45, 48], null, null, null],
         chordLen: 4, padVol: 0.05,
-        drums: "h...h...h...h..s",
-        drumVol: 0.5,
+        drums: "k.hsk.hhk.hsks.h",
+        drumVol: 0.6,
       },
-      // brighter, walking overworld groove with a light backbeat
+      // energetic adventure groove for the forest — G major, walking + backbeat
       overworld: {
-        stepDur: 0.19, type: "triangle", bassType: "triangle", vol: 0.13, bvol: 0.11,
-        lead: [69, null, 72, 74, 76, null, 74, 72, 71, null, 69, 67, 69, 72, 76, null],
-        bass: [45, null, 52, null, 41, null, 48, null, 43, null, 50, null, 40, null, 47, null],
-        chords: [[57, 60, 64], null, null, null, [53, 56, 60], null, null, null,
-                 [55, 59, 62], null, null, null, [52, 55, 59], null, null, null],
+        stepDur: 0.165, type: "triangle", bassType: "triangle", vol: 0.13, bvol: 0.11,
+        lead: [74, 76, 78, 79, 76, 74, 71, 74, 79, 78, 76, 74, 72, 74, 76, null],
+        bass: [43, 50, 47, 50, 38, 45, 42, 45, 40, 47, 43, 47, 36, 43, 40, 43],
+        chords: [[43, 47, 50], null, null, null, [38, 42, 45], null, null, null,
+                 [40, 43, 47], null, null, null, [36, 40, 43], null, null, null],
         chordLen: 4, padVol: 0.045,
-        drums: "k..h.s..k.hhk.s.",
+        drums: "k.hhk.shk.hhkshs",
         drumVol: 0.7,
       },
-      // driving battle theme: square lead stabs over a relentless beat
+      // battle: a 32-step two-phrase theme (call/answer) with a drum fill and
+      // an E-major lift for tension; busier and more dynamic than a 1-bar loop
       battle: {
-        stepDur: 0.135, type: "square", bassType: "sawtooth", vol: 0.12, bvol: 0.12,
-        lead: [69, 72, 71, 72, 69, 67, 69, 72, 68, 67, 65, 67, 64, 65, 67, 69],
-        bass: [45, 45, 45, 45, 41, 41, 41, 41, 40, 40, 40, 40, 43, 43, 43, 43],
-        chords: [[57, 60, 64], null, null, null, [53, 56, 60], null, null, null,
-                 [52, 55, 59], null, null, null, [55, 58, 62], null, null, null],
-        chordLen: 4, padVol: 0.035,
-        drums: "k.hsk.hsk.hskshs",
-        drumVol: 0.85,
+        stepDur: 0.13, type: "square", bassType: "sawtooth", vol: 0.12, bvol: 0.13,
+        lead: [69, 71, 72, 71, 69, 67, 65, 67, 69, 72, 76, 72, 71, 69, 67, 69,
+               68, 67, 65, 64, 65, 67, 68, 71, 72, 71, 69, 67, 65, 64, 62, 64],
+        bass: [45, 45, null, 45, 41, 41, null, 41, 40, 40, null, 40, 43, 43, null, 43],
+        chords: [[45, 48, 52], null, null, null, [41, 45, 48], null, null, null,
+                 [48, 52, 55], null, null, null, [40, 44, 47], null, null, null],
+        chordLen: 4, padVol: 0.04,
+        drums: "k.hsk.hsk.hskshsk.hsk.hskshsksks",
+        drumVol: 0.9,
       },
     };
   }
