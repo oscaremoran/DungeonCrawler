@@ -467,6 +467,20 @@ Object.assign(Game.prototype, {
     if (opt.shadow !== false) { ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillText(s, x + 1.5, y + 1.5); }
     ctx.fillStyle = opt.color || "#eef1ff"; ctx.fillText(s, x, y);
   },
+  // a small padlock glyph centered on (cx, cy); r is the body half-width
+  drawLock(cx, cy, r, color) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = Math.max(2, r * 0.28);
+    // shackle (the arc over the body)
+    ctx.beginPath();
+    ctx.arc(cx, cy - r * 0.35, r * 0.6, Math.PI, 0);
+    ctx.stroke();
+    // body
+    const bw = r * 1.5, bh = r * 1.25;
+    ctx.beginPath(); ctx.roundRect(cx - bw / 2, cy - r * 0.35, bw, bh, r * 0.3); ctx.fill();
+    ctx.restore();
+  },
   bar(x, y, w, h, frac, color) {
     const ctx = this.ctx;
     ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(x, y, w, h);
@@ -670,14 +684,22 @@ Object.assign(Game.prototype, {
       const s = r.skill, owned = p.boughtSkills.includes(s.id);
       const locked = !owned && (s.shop || p.lv < s.unlock), equipped = c.skills.includes(s.id);
       const source = s.shop ? "Skill Shop" : "Lv " + s.unlock;   // how this skill is obtained
-      ctx.globalAlpha = locked ? 0.4 : (ui.drag && ui.drag.id === s.id && ui.drag.from === "list" ? 0.35 : 1);
-      ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
-      ctx.drawImage(art[s.icon], r.x + 6, r.y + 5, 48, 48);
-      this.text(s.name, r.x + 66, r.y + 22, { size: 18, bold: true, color: locked ? "#9aa" : "#eef1ff" });
-      this.text(source + "   ·   " + s.mp + " MP", r.x + 66, r.y + 40, { size: 13, color: locked ? "#889" : "#bcd0f0" });
-      this.text(s.desc, r.x + 66, r.y + 56, { size: 13, color: locked ? "#778" : "#aeb8d8" });
-      if (locked) this.text(s.shop ? "SHOP" : "LOCKED", r.x + r.w - 14, r.y + 30, { size: 14, align: "right", color: s.shop ? "#ffd479" : "#e88" });
-      else if (equipped) this.text("equipped", r.x + r.w - 14, r.y + 30, { size: 13, align: "right", color: "#9cf0a0" });
+      ctx.globalAlpha = ui.drag && ui.drag.id === s.id && ui.drag.from === "list" ? 0.35 : 1;
+      if (locked) {
+        // locked rows are fully blacked out with a lock glyph; only the right-side
+        // tag stays legible — orange "SHOP" for shop skills, red level req for level skills
+        ctx.fillStyle = "#000"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
+        this.drawLock(r.x + 32, r.y + r.h / 2, 11, "#fff");
+        if (s.shop) this.text("SHOP", r.x + r.w - 14, r.y + r.h / 2 + 6, { size: 15, bold: true, align: "right", color: "#ffb347" });
+        else this.text("LOCKED · Lv " + s.unlock, r.x + r.w - 14, r.y + r.h / 2 + 6, { size: 14, bold: true, align: "right", color: "#e85a5a" });
+      } else {
+        ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 6); ctx.fill();
+        ctx.drawImage(art[s.icon], r.x + 6, r.y + 5, 48, 48);
+        this.text(s.name, r.x + 66, r.y + 22, { size: 18, bold: true, color: "#eef1ff" });
+        this.text(source + "   ·   " + s.mp + " MP", r.x + 66, r.y + 40, { size: 13, color: "#bcd0f0" });
+        this.text(s.desc, r.x + 66, r.y + 56, { size: 13, color: "#aeb8d8" });
+        if (equipped) this.text("equipped", r.x + r.w - 14, r.y + 30, { size: 13, align: "right", color: "#9cf0a0" });
+      }
       ctx.globalAlpha = 1;
     }
 

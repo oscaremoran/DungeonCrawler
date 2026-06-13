@@ -196,12 +196,8 @@ const SHOPS = {
     wares: [
       { type: "skill", id: "mend",    price: 60 },
       { type: "skill", id: "ember",   price: 80 },
-      { type: "skill", id: "heal",    price: 130 },
       { type: "skill", id: "jolt",    price: 150 },
-      { type: "skill", id: "fire",    price: 170 },
-      { type: "skill", id: "shield",  price: 220 },
       { type: "skill", id: "inferno", price: 340 },
-      { type: "skill", id: "bolt",    price: 380 },
     ],
   },
 };
