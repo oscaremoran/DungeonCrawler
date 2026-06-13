@@ -891,18 +891,19 @@ Object.assign(Game.prototype, {
     this.text(p.mp + " / " + p.maxmp, ix + 150, py + 128, { size: 15, align: "right", color: "#eef" });
     this.bar(ix, py + 134, 150, 8, p.mp / p.maxmp, "#5aa6f0");
 
-    // ally status blocks (one card per recruited party member, e.g. Elara)
+    // ally status blocks (one card per recruited party member, e.g. Elara).
+    // Match the hero card's height so the ally portrait renders at the same size.
     let cardY = py + ph + 14;
-    const ch = 132;
+    const ch = ph;
     p.party.forEach(m => {
       this.drawWindow(px, cardY, pw, ch);
-      const cpH = ch - 28;
+      const cpH = ch - 28;                            // same portrait height as Garran
       let mx = px + 16;
-      const por = this.art.ally_portrait || this.art[m.sprite];
+      const porKey = this.art.ally_portrait ? "ally_portrait" : m.sprite;
+      const por = this.art[porKey];
       if (por) {
-        const aw = cpH * (por.width / por.height);
-        this.ctx.drawImage(por, mx, cardY + 14, aw, cpH);
-        mx += aw + 18;
+        this.drawPortrait(mx, cardY + 14, cpH, porKey);   // framed, same as the hero
+        mx += cpH * (por.width / por.height) + 18;
       }
       this.text(m.name, mx, cardY + 40, { size: 22, bold: true, color: "#ffe9a0" });
       this.text("LV " + (m.lv || p.lv) + "  Contact", mx, cardY + 64, { size: 15, color: "#cfd6ff" });

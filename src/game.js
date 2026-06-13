@@ -977,12 +977,15 @@ class Game {
 
   /* pick the music track that matches the current screen (no-op if unchanged) */
   updateMusic() {
-    const s = this.state;
-    const boss = this.battle && this.battle.target && this.battle.target.type === "troll";
-    const track = s === "battle" ? (boss ? "troll" : "battle")
-      : s === "overworld" ? "overworld"
-      : (s === "title" || s === "difficulty" || s === "name" || s === "saveselect") ? "title"
-      : null;
+    const s = this.state, area = this.area || "";
+    const foe = this.battle && this.battle.target && this.battle.target.type;
+    const mercScene = this.cutscene && this.cutscene.type === "merc";
+    let track;
+    if (s === "gameover") track = "death";
+    else if (s === "battle") track = foe === "troll" ? "troll" : foe === "mercenary" ? "merc" : "battle";
+    else if (s === "overworld") track = mercScene ? "merc" : area.startsWith("koro") ? "koro" : "overworld";
+    else if (s === "title" || s === "difficulty" || s === "name" || s === "saveselect") track = "title";
+    else track = null;
     this.audio.playMusic(track);
   }
 

@@ -161,14 +161,14 @@ class GameAudio {
         drums: "k.......k.......",
         drumVol: 0.5,
       },
-      // forest: slow and uneasy — minor Am–F–G–E, wandering sparse melody, dark
-      // pads and a sparse soft beat
+      // forest: slow and uneasy, set apart from the title by a D-minor center
+      // (Dm–Bb–C–A) and a higher wandering woodwind-like melody over dark pads
       overworld: {
-        stepDur: 0.30, type: "triangle", bassType: "sine", vol: 0.12, bvol: 0.11,
-        lead: [null, 69, null, 67, null, 65, null, 64, null, 65, null, 67, null, 64, 62, null],
-        bass: [45, null, null, null, 41, null, null, null, 43, null, null, null, 40, null, null, null],
-        chords: [[45, 48, 52], null, null, null, [41, 45, 48], null, null, null,
-                 [43, 47, 50], null, null, null, [40, 44, 47], null, null, null],
+        stepDur: 0.26, type: "triangle", bassType: "sine", vol: 0.12, bvol: 0.11,
+        lead: [null, 69, null, 72, null, 70, null, 69, null, 67, null, 65, null, 67, 69, null],
+        bass: [50, null, null, null, 46, null, null, null, 48, null, null, null, 45, null, null, null],
+        chords: [[50, 53, 57], null, null, null, [46, 50, 53], null, null, null,
+                 [48, 52, 55], null, null, null, [45, 49, 52], null, null, null],
         chordLen: 4, padVol: 0.05,
         drums: "h...k...h...s...",
         drumVol: 0.45,
@@ -186,17 +186,64 @@ class GameAudio {
         drums: "kkhskhhskkhskshskkhskhhskshsksss",
         drumVol: 1.0,
       },
-      // troll boss: slow, heavy and menacing — a lumbering low sawtooth riff with
-      // tritone tension over a stomping E-minor pedal and huge half-time kicks
+      // troll boss: FFVII-boss energy — very fast, an angular E-minor sawtooth
+      // riff with chromatic tension over the signature fast descending-chromatic
+      // bass ostinato and a relentless 16th-note kick/hat groove
       troll: {
-        stepDur: 0.18, type: "sawtooth", bassType: "sawtooth", vol: 0.13, bvol: 0.16,
-        lead: [52, 52, 55, 52, 51, 52, 55, 58, 52, 52, 51, 52, 50, 51, 52, null],
-        bass: [40, 40, 40, 40, 41, 41, 40, 40, 38, 38, 40, 40, 35, 35, 40, 40],
+        stepDur: 0.105, type: "sawtooth", bassType: "sawtooth", vol: 0.085, bvol: 0.11,
+        guitar: true,   // lead chugs distorted power chords, bass is a palm-muted guitar
+        lead: [64, 64, 67, 64, 63, 64, 67, 71, 64, 64, 63, 64, 62, 63, 64, 67,
+               71, 71, 74, 71, 70, 71, 74, 77, 76, 74, 71, 69, 67, 66, 64, 67],
+        bass: [52, 52, 51, 52, 50, 50, 49, 50, 48, 48, 47, 48, 47, 49, 50, 52],
         chords: [[40, 43, 47], null, null, null, [36, 40, 43], null, null, null,
                  [33, 36, 40], null, null, null, [35, 39, 42], null, null, null],
-        chordLen: 4, padVol: 0.045,
-        drums: "k...s...k..ks..s",
+        chordLen: 4, padVol: 0.03,
+        // heavy-metal kit: crash accents, machine-gun double-bass, snare backbeats
+        drums: "ckkkskkkkkkkskkkckkkskkkkkkkskkk",
         drumVol: 1.0,
+      },
+      // you-died screen: a slow, dark C-minor dirge — sparse descending melody,
+      // sustained dissonant pads and a tolling low kick
+      death: {
+        stepDur: 0.5, type: "triangle", bassType: "sine", vol: 0.11, bvol: 0.13,
+        // a 32-step C-minor funeral dirge: a slow mournful lament that descends and
+        // resolves through the leading tone, over deep drone-pads and a tolling bell
+        lead: [60, null, null, 58, 56, null, 55, null, 53, null, 51, null, 50, null, null, null,
+               55, null, null, 56, 55, null, 53, null, 51, null, 50, null, 47, null, 48, null],
+        bass: [36, null, null, null, null, null, null, null, 41, null, null, null, null, null, null, null,
+               44, null, null, null, null, null, null, null, 43, null, null, null, null, null, null, null],
+        // i – iv – bVI – V(dominant): each chord carries a sub-octave root for weight
+        chords: [[24, 36, 39, 43], null, null, null, null, null, null, null,
+                 [29, 41, 44, 48], null, null, null, null, null, null, null,
+                 [32, 44, 47, 51], null, null, null, null, null, null, null,
+                 [31, 43, 47, 50], null, null, null, null, null, null, null],
+        chordLen: 8, padVol: 0.07,
+        drums: "k.......c.......k.......k.......",
+        drumVol: 0.45,
+      },
+      // Koro town: upbeat and bright — a cheerful D-major hook over a I–V–vi–IV
+      // walking bass with a lively backbeat
+      koro: {
+        stepDur: 0.23, type: "triangle", bassType: "triangle", vol: 0.14, bvol: 0.11,
+        lead: [74, 78, 81, 78, 76, 74, 73, 74, 78, 81, 83, 81, 78, 76, 74, 73],
+        bass: [50, 57, 54, 57, 45, 52, 49, 52, 47, 54, 50, 54, 43, 50, 47, 50],
+        chords: [[50, 54, 57], null, null, null, [45, 49, 52], null, null, null,
+                 [47, 50, 54], null, null, null, [43, 47, 50], null, null, null],
+        chordLen: 4, padVol: 0.045,
+        drums: "k.hsk.hhk.hsks.h",
+        drumVol: 0.7,
+      },
+      // mercenaries: a tense military march — staccato G-minor sawtooth over a
+      // steady root-fifth march with a snare-driven backbeat
+      merc: {
+        stepDur: 0.17, type: "sawtooth", bassType: "sawtooth", vol: 0.12, bvol: 0.13,
+        lead: [67, null, 67, 70, 70, null, 68, 67, 67, null, 67, 70, 72, 70, 68, 67],
+        bass: [43, 43, 50, 43, 41, 41, 48, 41, 43, 43, 50, 43, 46, 46, 53, 46],
+        chords: [[43, 46, 50], null, null, null, [41, 45, 48], null, null, null,
+                 [43, 46, 50], null, null, null, [39, 43, 46], null, null, null],
+        chordLen: 4, padVol: 0.04,
+        drums: "k.s.k.shk.s.k.ss",
+        drumVol: 0.85,
       },
     };
   }
@@ -223,8 +270,14 @@ class GameAudio {
     while (this._nextTime < this.ctx.currentTime + 0.12) {
       const i = this._step % len, t = this._nextTime;
       const ld = tr.lead[i], bs = tr.bass[i % tr.bass.length];
-      if (ld != null) this._musicNote(tr.type, this.midi(ld), t, tr.stepDur * 0.9, tr.vol, { detune: 7, send: 0.5 });
-      if (bs != null) this._musicNote(tr.bassType, this.midi(bs - 12), t, tr.stepDur * 0.95, tr.bvol);
+      if (ld != null) {
+        if (tr.guitar) for (const iv of [0, 7, 12]) this._guitar(this.midi(ld + iv), t, tr.stepDur * 0.92, tr.vol, 0.25);
+        else this._musicNote(tr.type, this.midi(ld), t, tr.stepDur * 0.9, tr.vol, { detune: 7, send: 0.5 });
+      }
+      if (bs != null) {
+        if (tr.guitar) this._guitar(this.midi(bs - 12), t, tr.stepDur * 0.85, tr.bvol, 0);
+        else this._musicNote(tr.bassType, this.midi(bs - 12), t, tr.stepDur * 0.95, tr.bvol);
+      }
       const ch = tr.chords && tr.chords[i % tr.chords.length];
       if (ch) {
         const dur = tr.stepDur * (tr.chordLen || 4) * 0.95;
@@ -235,6 +288,7 @@ class GameAudio {
         if (d === "k") this._kick(t, dv);
         else if (d === "s") this._snare(t, dv);
         else if (d === "h") this._hat(t, dv);
+        else if (d === "c") this._crash(t, dv);
       }
       this._nextTime += tr.stepDur;
       this._step++;
@@ -268,6 +322,26 @@ class GameAudio {
     o.connect(f); f.connect(g); g.connect(this.musicGain);
     o.start(t); o.stop(t + dur + 0.02);
   }
+  // a soft-clip distortion curve for the guitar voice (amount = drive)
+  _distCurve(amount) {
+    const n = 256, curve = new Float32Array(n), k = amount;
+    for (let i = 0; i < n; i++) { const x = (i * 2) / n - 1; curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x)); }
+    return curve;
+  }
+  // distorted "electric guitar" voice: saw -> waveshaper -> lowpass cab sim.
+  // Stack [0,7,12] semitones for chugging power chords.
+  _guitar(freq, t, dur, peak, send) {
+    const o = this.ctx.createOscillator(), ws = this.ctx.createWaveShaper(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+    o.type = "sawtooth"; o.frequency.value = freq;
+    ws.curve = this._distCurve(45); if ("oversample" in ws) ws.oversample = "2x";
+    f.type = "lowpass"; f.frequency.value = 2200;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);   // fast pick attack
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(ws); ws.connect(f); f.connect(g); g.connect(this.musicGain);
+    if (send && this.musicDelay) { const s = this.ctx.createGain(); s.gain.value = send; g.connect(s); s.connect(this.musicDelay); }
+    o.start(t); o.stop(t + dur + 0.02);
+  }
   /* ---- synth drum kit (scheduled at absolute times, routed to drumGain) ---- */
   _kick(t, v = 1) {
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
@@ -297,6 +371,17 @@ class GameAudio {
     const f = this.ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 7000;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18 * v, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.drumGain); src.start(t); src.stop(t + dur + 0.02);
+  }
+  // crash cymbal — a long, bright decaying noise wash for metal accents
+  _crash(t, v = 1) {
+    const dur = 0.55, n = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);   // decaying noise
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const f = this.ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 5000;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3 * v, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f); f.connect(g); g.connect(this.drumGain); src.start(t); src.stop(t + dur + 0.02);
   }
 }
