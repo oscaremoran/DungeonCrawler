@@ -58,7 +58,9 @@ class Game {
       koro_off:   buildKoroInterior({ shop: "off",   returnEntry: "from_off" }),
       koro_skill: buildKoroInterior({ shop: "skill", returnEntry: "from_skill" }),
       koro_inn:   buildKoroInterior({ inn: true, returnEntry: "from_inn" }),
+      koro_cards: buildKoroInterior({ cards: true, returnEntry: "from_cards" }),
       worldmap:   buildWorldMap(),
+      xalkorr:    buildXalkorr(),
     };
     for (const id in this.areas) {                  // instantiate persistent enemies per area
       const w = this.areas[id];
@@ -90,8 +92,11 @@ class Game {
       party: [],           // recruited allies, e.g. [{ id:'ally', name:'ELARA', sprite:'ally_idle' }]
       equipOwned: ["wood_sword", "cloak"],          // gear in the pack
       equip: { weapon: "wood_sword", armor: "cloak" },  // gear currently worn
+      cards: {},           // monster trading cards collected: { type: count }
     };
     this.shop = null;        // null | { id, sel } — open storefront
+    this.cardshop = null;    // null | { sel, reveal? } — Monster Cards purchase screen
+    this.sleeping = null;    // null | { t, dur, healed } — inn-rest blackout
     this.naming = null;      // null | { title, buf, onDone } — mid-game name-entry box
     this.trail = [];         // recent player poses, for party followers
 
@@ -188,8 +193,10 @@ class Game {
     if (this.state === "gameover") { this.gameoverKey(key); return; }
     if (this.state === "overworld") {
       if (this.encounter) return;                 // locked during roar/whirl
+      if (this.sleeping) return;                  // locked during the inn blackout
       if (this.naming) { this.namingKey(key); return; }  // mid-game name-entry box
       if (this.shop) { this.shopKey(key); return; }  // browsing a storefront
+      if (this.cardshop) { this.cardShopKey(key); return; }  // buying monster card packs
       if (this.prompt) {                           // yes/no confirmation
         if (key === "arrowleft" || key === "a" || key === "arrowright" || key === "d") this.prompt.sel ^= 1;
         else if (key === "escape") this.prompt = null;
@@ -236,6 +243,7 @@ class Game {
         if (pick === "Status") this.ui = { screen: "status", sel: 0 };
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
         else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
+        else if (pick === "Bestiary") this.ui = { screen: "bestiary", sel: 0 };
         else if (pick === "Quests") this.ui = { screen: "quests", sel: 0 };
         else if (pick === "Save") {
           if (this.difficulty === "hardcore") this.flash = { text: "Hardcore — saving is disabled.", t: 1600 };
@@ -244,6 +252,10 @@ class Game {
         }
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
+    } else if (ui.screen === "bestiary") {
+      const n = CARD_MONSTERS.length;
+      if (key === "arrowleft" || key === "a") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
+      else if (key === "arrowright" || key === "d") { ui.sel = (ui.sel + 1) % n; this.audio.play("move"); }
     }
   }
 
@@ -298,6 +310,15 @@ class Game {
           ],
           onClose: () => this.beginNameContact(n),
         };
+      } else if (n.cards) {
+        this.dialogue = {
+          name: n.name, page: 0, portrait: n.sprite,
+          lines: [[
+            "Monster cards! Every beast in the land,", "pressed onto a fine little card.",
+            "Buy a pack — never know what you'll pull.",
+          ]],
+          onClose: () => { this.cardshop = { sel: 0, reveal: null }; },
+        };
       } else if (n.innkeeper) {
         if (!this.hasAlly()) {
           // gated: you must speak with Elara (and take her on) before he'll deal with you
@@ -305,9 +326,10 @@ class Game {
             ["I've no words for you yet, stranger."],
           ]};
         } else if (this.mercSceneDone) {
-          this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
-            ["...", "(He keeps a wary eye on the door,", "rag wringing in his fists.)"],
-          ]};
+          this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [[
+            "Long road ahead of you, I'd wager.",
+            "A warm bed's 250 gold — sleep it off", "and you'll wake without a scratch.",
+          ]], onClose: () => this.offerInnRest() };
         } else {
           this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
             ["So you're the pair the boss spoke of.", "Good. Koro needs blades it can trust."],
@@ -328,6 +350,39 @@ class Game {
   }
 
   hasAlly(n) { return this.player.party.some(m => m.id === "ally"); }
+
+  /* ------------------------------- inn rest ------------------------------ */
+  /* the innkeeper's offer: 250 gold for a night's sleep that heals to full */
+  offerInnRest() {
+    const p = this.player;
+    const full = p.hp >= p.maxhp && p.mp >= p.maxmp
+      && p.party.every(m => (m.hp ?? m.maxhp) >= m.maxhp);
+    if (full) { this.flash = { text: "You're hale already — no need to rest.", t: 1700 }; return; }
+    this.prompt = { sel: 0, text: "Rest at the inn for 250 gold?",
+      onYes: () => this.restAtInn(), onNo: () => {} };
+  }
+  restAtInn() {
+    const p = this.player;
+    if (p.gold < 250) { this.flash = { text: "Not enough gold.", t: 1600 }; this.audio.play("cancel"); return; }
+    p.gold -= 250;
+    this.audio.play("buy");
+    this.sleeping = { t: 0, dur: 2200, healed: false };   // fade to black, heal, fade back
+    p.moving = false; p.frame = 0;
+  }
+  /* advance the blackout: heal at the darkest point, wake refreshed at the end */
+  updateSleep(dt) {
+    const s = this.sleeping; s.t += dt;
+    if (!s.healed && s.t >= s.dur / 2) {
+      const p = this.player;
+      p.hp = p.maxhp; p.mp = p.maxmp;
+      for (const m of p.party) m.hp = m.maxhp;          // allies recover too
+      s.healed = true;
+    }
+    if (s.t >= s.dur) {
+      this.sleeping = null;
+      this.flash = { text: "You wake fully rested.", t: 1800 };
+    }
+  }
 
   /* open the "Name the Contact" entry box before the recruit finalises */
   beginNameContact(n) {
@@ -420,6 +475,7 @@ class Game {
       this.completeQuest("defeat_troll");
       this.addQuest("find_contact");
     }
+    else if (id === "xalkorr") this.completeQuest("reach_xalkorr");
   }
 
   /* --------------------------- mercenary ambush -------------------------- */
@@ -497,8 +553,10 @@ class Game {
   tryLockedDoor() {
     const p = this.player, ptx = Math.floor(p.x / TILE), pty = Math.floor(p.y / TILE);
     for (const d of (this.world.lockedDoors || [])) {
+      if (d.needsAlly && this.hasAlly()) continue;   // Elara joined — the door now opens (handled by the portal)
       if (Math.abs(ptx - d.tx) <= 1 && Math.abs(pty - d.ty) <= 1) {
-        this.flash = { text: "The door is locked. No one answers.", t: 1500 };
+        const lines = d.text || ["The door is locked.", "No one answers."];
+        this.dialogue = { name: "", page: 0, lines: [lines] };
         return true;
       }
     }
@@ -544,6 +602,46 @@ class Game {
       p.equipOwned.push(w.id);
       this.flash = { text: "Bought " + EQUIP_BY_ID[w.id].name + "!", t: 1600 };
     }
+  }
+
+  /* ----------------------- monster trading cards ------------------------- */
+  cardShopKey(key) {
+    const cs = this.cardshop;
+    if (cs.reveal) {                                 // dismiss the pack-opening reveal
+      if (key === "enter" || key === " " || key === "escape" || key === "m") {
+        cs.reveal = null; this.audio.play("move");
+      }
+      return;
+    }
+    const n = CARD_PACKS.length;
+    if (key === "escape" || key === "m") { this.cardshop = null; return; }
+    if (key === "arrowup" || key === "w") { cs.sel = (cs.sel + n - 1) % n; this.audio.play("move"); }
+    else if (key === "arrowdown" || key === "s") { cs.sel = (cs.sel + 1) % n; this.audio.play("move"); }
+    else if (key === "enter" || key === " ") this.buyCardPack(CARD_PACKS[cs.sel]);
+  }
+  /* roll `pack.count` monster types, weighted by each foe's card rarity */
+  rollCards(pack) {
+    const pool = [];
+    for (const t of CARD_MONSTERS) {
+      const w = pack.weights[CARD_INFO[t].rarity] || 1;
+      for (let i = 0; i < w; i++) pool.push(t);
+    }
+    const out = [];
+    for (let i = 0; i < pack.count; i++) out.push(pool[(Math.random() * pool.length) | 0]);
+    return out;
+  }
+  buyCardPack(pack) {
+    const p = this.player;
+    if (p.gold < pack.price) { this.flash = { text: "Not enough gold.", t: 1200 }; this.audio.play("cancel"); return; }
+    p.gold -= pack.price;
+    this.audio.play("buy");
+    if (!p.cards) p.cards = {};
+    const got = this.rollCards(pack), isNew = [];
+    for (const t of got) {
+      if (!p.cards[t]) isNew.push(t);
+      p.cards[t] = (p.cards[t] || 0) + 1;
+    }
+    this.cardshop.reveal = { cards: got, isNew };    // shown over the shop until dismissed
   }
 
   startIntro() {
@@ -601,7 +699,7 @@ class Game {
     try { localStorage.clear(); } catch (e) {}
     this.state = "cheater"; this.fade = 0;
     this.battle = this.encounter = this.transition = null;
-    this.ui = this.shop = this.dialogue = this.prompt = this.naming = null;
+    this.ui = this.shop = this.cardshop = this.dialogue = this.prompt = this.naming = null;
     if (this.hud) this.hud.style.display = "none";
   }
 
@@ -667,6 +765,7 @@ class Game {
       hp: p.hp, maxhp: p.maxhp, mp: p.mp, maxmp: p.maxmp, atk: p.atk, def: p.def,
       gold: p.gold, skills: p.skills.slice(), boughtSkills: p.boughtSkills.slice(),
       party: p.party.map(m => ({ ...m })),
+      cards: { ...(p.cards || {}) },
       equipOwned: p.equipOwned.slice(), equip: { ...p.equip },
       chestsOpened: Object.fromEntries(Object.keys(this.areas)
         .filter(id => this.areas[id].chests)
@@ -697,6 +796,7 @@ class Game {
       x: data.px, y: data.py,
     });
     p.boughtSkills = (data.boughtSkills || []).slice();
+    p.cards = { ...(data.cards || {}) };
     p.party = (data.party || []).map(m => {
       const lv = (data.lv || p.lv || 1);
       return {
@@ -827,9 +927,10 @@ class Game {
     for (const n of (this.npcs || [])) n.animT += dt;
     if (this.autosaveAnim) { this.autosaveAnim.t -= dt; if (this.autosaveAnim.t <= 0) this.autosaveAnim = null; }
 
+    if (this.sleeping) { this.updateSleep(dt); p.moving = false; p.frame = 0; return; }   // inn blackout
     if (this.encounter) { this.updateEncounter(dt); return; }
     if (this.cutscene) { this.updateCutscene(dt); return; }   // scripted scene: actors move, player frozen
-    if (this.ui || this.dialogue || this.prompt || this.shop || this.naming) { p.moving = false; p.frame = 0; return; }  // paused for UI
+    if (this.ui || this.dialogue || this.prompt || this.shop || this.cardshop || this.naming) { p.moving = false; p.frame = 0; return; }  // paused for UI
 
     const k = this.keys;
     let dx = 0, dy = 0;
@@ -885,6 +986,7 @@ class Game {
     if (this.transition || this.portalCD > 0) return false;
     const p = this.player, tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
     for (const d of (this.world.portals || [])) {
+      if (d.needsAlly && !this.hasAlly()) continue;  // sealed until Elara joins
       if (tx === d.tx && ty === d.ty) { this.goToArea(d.to, d.entry, false); return true; }
     }
     return false;
@@ -915,9 +1017,12 @@ class Game {
     }
   }
 
-  /* answer the yes/no fight prompt */
+  /* answer a yes/no prompt. Generic prompts carry onYes/onNo callbacks; the boss
+   * fight prompt (no callbacks) falls through to the encounter-start path. */
   resolvePrompt(yes) {
-    const target = this.prompt.target; this.prompt = null;
+    const pr = this.prompt; this.prompt = null;
+    if (pr.onYes || pr.onNo) { if (yes) { if (pr.onYes) pr.onYes(); } else if (pr.onNo) pr.onNo(); return; }
+    const target = pr.target;
     if (!yes) { this.bossTalkCD = 1200; return; }     // back off; re-ask shortly
     this.encounter = { phase: "roar", t: 0, target };
     target.anim = "alert"; target.animT = 0; this.audio.play("encounter");
@@ -934,7 +1039,7 @@ class Game {
     const e = (this.world.entries && this.world.entries[side]) || this.world.spawn;
     this.player.x = e.tx * TILE + TILE / 2;
     this.player.y = e.ty * TILE + TILE / 2;
-    this.encounter = null; this.dialogue = null; this.shop = null; this.encounterCD = 1200; this.bossTalkCD = 0;
+    this.encounter = null; this.dialogue = null; this.shop = null; this.cardshop = null; this.encounterCD = 1200; this.bossTalkCD = 0;
     this.portalCD = 600;     // brief grace so we don't instantly re-trigger the door we arrived on
     this.updateQuestsForArea(id);
     if (this.player.party.length) this.seedTrail();

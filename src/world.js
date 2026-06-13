@@ -225,18 +225,21 @@ function buildKoro() {
     { kind: "house_blue",   htx: 18, hty: 6,  to: "koro_off",   entry: "from_off" },
     { kind: "house_green",  htx: 30, hty: 6,  to: "koro_skill", entry: "from_skill" },
     { kind: "house_yellow", htx: 10, hty: 19, to: "koro_inn",   entry: "from_inn" },
-    { kind: "house_purple", htx: 26, hty: 19, locked: true },
+    // the purple house: a card collector. Sealed until Elara joins (needsAlly),
+    // after which stepping on its door opens the Monster Cards shop interior.
+    { kind: "house_purple", htx: 26, hty: 19, to: "koro_cards", entry: "from_cards",
+      needsAlly: true, lockedText: ["The shutters are drawn.", "No one answers — yet."] },
   ];
   r.entries = { enter: { tx: cx, ty: iy1 - 2 } };
   for (const h of houses) {
     placeObj(r, h.kind, h.htx, h.hty);
     const dx = h.htx + 1, dy = h.hty + 2;           // front-door tile
     blocked[dy][dx] = false;                        // ensure the doorstep is walkable
-    if (h.locked) { r.lockedDoors.push({ tx: dx, ty: dy }); }
-    else {
-      r.portals.push({ tx: dx, ty: dy, to: h.to, entry: "in" });
-      r.entries[h.entry] = { tx: dx, ty: dy + 1 };  // stand in front on return
-    }
+    r.portals.push({ tx: dx, ty: dy, to: h.to, entry: "in", needsAlly: h.needsAlly });
+    r.entries[h.entry] = { tx: dx, ty: dy + 1 };    // stand in front on return
+    // a door that needs Elara also registers as "locked" so bumping it before she
+    // joins shows a message instead of silently doing nothing.
+    if (h.needsAlly) r.lockedDoors.push({ tx: dx, ty: dy, needsAlly: true, text: h.lockedText });
   }
 
   // southern opening in the cliff wall — the road back down to the troll's lair
@@ -300,21 +303,24 @@ function buildWorldMap() {
     { id: 2, type: "wolf", tx: 15, ty: 21 },
   ];
 
-  // a winding dirt road climbing north up the map
+  // a winding dirt road climbing the full height of the map — south mouth (back
+  // to Koro) to the north mouth (on to Xal'Korr)
   let tx = rx;
-  for (let y = MAP_H - 1; y >= 2; y--) {
+  for (let y = MAP_H - 1; y >= 0; y--) {
     for (let w = -1; w <= 1; w++) if (tx + w >= 0 && tx + w < MAP_W) ground[y][tx + w] = G_DIRT;
-    if (rng() < 0.4) tx += rng() < 0.5 ? -1 : 1;
+    if (y > 2 && rng() < 0.4) tx += rng() < 0.5 ? -1 : 1;   // straighten as it nears the north gate
     tx = Math.max(6, Math.min(MAP_W - 7, tx));
   }
+  const northX = tx;   // where the road meets the top edge
 
-  // dense tree wall around the border, leaving the southern road-mouth open
+  // dense tree wall around the border, leaving the south + north road-mouths open
   for (let x = 0; x < MAP_W; x++) {
     for (let y = 0; y < MAP_H; y++) {
       const edge = x < 2 || y < 2 || x >= MAP_W - 2 || y >= MAP_H - 2;
       if (!edge) continue;
       const southMouth = y >= MAP_H - 2 && Math.abs(x - rx) <= 1;
-      if (southMouth || ground[y][x] === G_DIRT) continue;
+      const northMouth = y < 2 && Math.abs(x - northX) <= 1;
+      if (southMouth || northMouth || ground[y][x] === G_DIRT) continue;
       if (rng() < 0.92) placeObj(r, "tree", x, y);
     }
   }
@@ -332,10 +338,12 @@ function buildWorldMap() {
   sprinkle("flowers_red", 22, 0.7);
   sprinkle("flowers_orange", 22, 0.7);
 
-  // arrive from Koro at the southern road-mouth; step back onto the mouth to return
-  r.entries = { from_koro: { tx: rx, ty: MAP_H - 4 } };
+  // arrive from Koro at the southern road-mouth; step back onto the mouth to return.
+  // the northern mouth carries on into Xal'Korr (and returns the hero here).
+  r.entries = { from_koro: { tx: rx, ty: MAP_H - 4 }, from_xalkorr: { tx: northX, ty: 3 } };
   r.spawn = { tx: rx, ty: MAP_H - 4 };
   r.portals.push({ tx: rx, ty: MAP_H - 2, to: "koro", entry: "from_worldmap" });
+  r.portals.push({ tx: northX, ty: 1, to: "xalkorr", entry: "from_worldmap" });
   // a signpost by the entrance
   placeObj(r, "sign", rx + 2, MAP_H - 5);
   r.signs.push({ tx: rx + 2, ty: MAP_H - 5, text: ["Xal'Korr, City of Bone — north.", "Koro — back south."] });
@@ -346,6 +354,114 @@ function buildWorldMap() {
     { tx: MAP_W - 7,  ty: 7,          item: "chain_mail",   hide: true },
     { tx: 7,          ty: MAP_H - 8,  gold: 250,            hide: true },
   ]);
+  return r;
+}
+
+/* Xal'Korr, the City of Bone — the journey's end (for now). A cobbled avenue
+ * climbs from the great bone gate in the south up to a plaza crowned by a
+ * skeletal reaper statue, all of it ringed by a wall of skulls and gravestones,
+ * with a graveyard of tombs and dead trees sprawling to either side. Reached
+ * through the worldmap's north mouth. */
+function buildXalkorr() {
+  const rng = mulberry32(0xB04E);
+  const ground = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(G_BONE));
+  const blocked = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(false));
+  const r = { ground, blocked, objects: [], enemyDefs: [], exits: [], npcs: [], portals: [], lockedDoors: [], signs: [] };
+  const cx = (MAP_W / 2) | 0;
+
+  // a cobbled avenue up the middle, opening into a broad plaza near the top
+  for (let y = 2; y <= MAP_H - 1; y++)
+    for (let w = -2; w <= 2; w++) ground[y][cx + w] = G_STONE;
+  for (let y = 3; y <= 9; y++)
+    for (let x = cx - 7; x <= cx + 7; x++) ground[y][x] = G_STONE;
+
+  // a wall of bones & headstones around the border, leaving the south gate open
+  const wallProps = ["xk_gravestone", "xk_skull_big", "xk_bone_bundle", "xk_gravestone"];
+  for (let x = 1; x < MAP_W - 1; x += 2) {
+    for (const y of [1, MAP_H - 2]) {
+      if (y >= MAP_H - 2 && Math.abs(x - cx) <= 2) continue;    // south gate gap
+      placeObj(r, wallProps[(rng() * wallProps.length) | 0], x, y);
+    }
+  }
+  for (let y = 1; y < MAP_H - 1; y += 2) {
+    for (const x of [1, MAP_W - 2])
+      placeObj(r, wallProps[(rng() * wallProps.length) | 0], x, y);
+  }
+
+  // the great bone gate straddling the south entrance — its pillars block, but
+  // the archway itself stays walkable so the hero can pass beneath it
+  const gy = MAP_H - 4;
+  placeObj(r, "xk_gate", cx, gy);
+  blocked[gy][cx - 1] = true; blocked[gy][cx + 1] = true; blocked[gy][cx] = false;
+
+  // the plaza centrepiece: a skeletal reaper, candle-lit and totem-flanked
+  placeObj(r, "xk_reaper", cx, 5);
+  placeObj(r, "xk_candles", cx - 2, 6);
+  placeObj(r, "xk_candles", cx + 2, 6);
+  placeObj(r, "xk_statue", cx - 6, 5);
+  placeObj(r, "xk_statue", cx + 6, 5);
+
+  // skull totems lining the avenue like lamp-posts
+  for (let y = 13; y <= MAP_H - 7; y += 4) {
+    placeObj(r, "xk_skull_totem", cx - 4, y);
+    placeObj(r, "xk_skull_totem", cx + 4, y);
+  }
+
+  // a graveyard sprawling off the avenue: tombs, headstones and dead trees
+  const yard = [
+    ["xk_tomb", cx - 9, 13], ["xk_tomb", cx + 8, 16],
+    ["xk_deadtree", cx - 12, 9], ["xk_deadtree", cx + 11, 20], ["xk_deadtree", cx - 11, 23],
+    ["xk_gravestone", cx - 8, 18], ["xk_gravestone", cx - 10, 20], ["xk_gravestone", cx + 9, 11],
+    ["xk_gravestone", cx + 12, 13], ["xk_gravestone", cx - 13, 16], ["xk_gravestone", cx + 10, 24],
+    ["xk_skull_pile", cx + 11, 7], ["xk_skull_pile", cx - 13, 26], ["xk_skull_pile", cx + 8, 27],
+    ["xk_boulder", cx - 14, 12], ["xk_boulder", cx + 13, 18],
+    ["xk_barrel", cx - 6, gy - 1], ["xk_barrel", cx + 5, gy - 1],
+  ];
+  for (const [kind, x, y] of yard)
+    if (x >= 1 && x < MAP_W - 2 && !blocked[y][x]) placeObj(r, kind, x, y);
+
+  // a skull sign just inside the gate
+  placeObj(r, "xk_skull_sign", cx + 4, gy - 1);
+  r.signs.push({ tx: cx + 4, ty: gy - 1, text: ["XAL'KORR — the City of Bone.", "Tread softly. The dead keep court here."] });
+
+  // arrive from the worldmap just inside the gate; step onto the bottom mouth to return
+  r.entries = { from_worldmap: { tx: cx, ty: MAP_H - 5 } };
+  r.spawn = { tx: cx, ty: MAP_H - 5 };
+  r.portals.push({ tx: cx, ty: MAP_H - 1, to: "worldmap", entry: "from_xalkorr" });
+
+  // chests rewarding a detour into the graves (placed before the legion so
+  // their now-solid tiles are skipped by the scatter below)
+  addChests(r, [
+    { tx: cx - 13, ty: 13, item: "plate_armor" },
+    { tx: cx + 12, ty: 26, gold: 400 },
+    { tx: cx - 8,  ty: 9,  gold: 200 },
+    { tx: cx + 8,  ty: 13, gold: 200 },
+    { tx: cx - 6,  ty: 24, gold: 200 },
+  ]);
+
+  // the bone legion prowling the streets and graves: a handful of warriors,
+  // archers and mages. Placed on open ground, kept clear of the gate so the
+  // hero isn't ambushed the instant they arrive.
+  const roster = [];
+  for (let i = 0; i < 4; i++) roster.push("skeleton_warrior");
+  for (let i = 0; i < 3; i++) roster.push("skeleton_archer");
+  for (let i = 0; i < 3; i++) roster.push("skeleton_mage");
+  for (let i = roster.length - 1; i > 0; i--) {       // deterministic shuffle
+    const j = (rng() * (i + 1)) | 0; const t = roster[i]; roster[i] = roster[j]; roster[j] = t;
+  }
+  const placed = [];
+  let eid = 0;
+  for (const type of roster) {
+    for (let tries = 0; tries < 50; tries++) {
+      const x = 3 + ((rng() * (MAP_W - 6)) | 0), y = 4 + ((rng() * (MAP_H - 12)) | 0);
+      if (r.blocked[y][x]) continue;                                  // not on a prop
+      if (Math.abs(x - cx) + Math.abs(y - (MAP_H - 5)) <= 6) continue; // clear of the gate
+      if (placed.some(p => Math.abs(p.tx - x) <= 1 && Math.abs(p.ty - y) <= 1)) continue;
+      const def = { id: eid++, type, tx: x, ty: y };
+      r.enemyDefs.push(def); placed.push(def);
+      break;
+    }
+  }
   return r;
 }
 
@@ -377,6 +493,15 @@ function buildKoroInterior(opt) {
     placeObj(r, "crate", cx + 3, iy0 + 3);
     r.npcs.push({ tx: cx, ty: iy0 + 3, name: SHOPS[opt.shop].keeper, shop: opt.shop, sprite: "npc_keeper" });
     blocked[iy0 + 3][cx] = true;                    // the keeper blocks their spot
+  }
+
+  if (opt.cards) {
+    // the card collector behind a crate counter, packs stacked beside him
+    placeObj(r, "crate", cx - 3, iy0 + 3);
+    placeObj(r, "crate", cx + 3, iy0 + 3);
+    placeObj(r, "crate", cx + 4, iy0 + 3);
+    r.npcs.push({ tx: cx, ty: iy0 + 3, name: "FENWICK", cards: true, sprite: "npc_keeper", portrait: "npc_keeper" });
+    blocked[iy0 + 3][cx] = true;
   }
 
   if (inn) {

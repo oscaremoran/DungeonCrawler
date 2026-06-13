@@ -37,16 +37,17 @@ Object.assign(Game.prototype, {
   },
 
   /* draw one decoration / the player, anchored at the tile's base */
-  drawSprite(img, worldX, baseY, wTiles, flip) {
+  drawSprite(img, worldX, baseY, wTiles, flip, smooth) {
     const w = wTiles * TILE;
     const h = w * (img.height / img.width);
     const ctx = this.ctx;
     const sx = worldX - w / 2 - this.cam.x;
     const sy = baseY - h - this.cam.y;
-    if (flip) {
+    if (flip || smooth) {                       // smooth: bilinear scale for low-res art (skeletons)
       ctx.save();
-      ctx.translate(sx + w, sy); ctx.scale(-1, 1);
-      ctx.drawImage(img, 0, 0, w, h);
+      if (smooth) ctx.imageSmoothingEnabled = true;
+      if (flip) { ctx.translate(sx + w, sy); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w, h); }
+      else ctx.drawImage(img, sx, sy, w, h);
       ctx.restore();
     } else {
       ctx.drawImage(img, sx, sy, w, h);
@@ -249,7 +250,7 @@ Object.assign(Game.prototype, {
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         const g = this.world.ground[ty][tx];
-        const img = g === G_DIRT ? art.dirt : g === G_EDGE ? art.grass_edge : g === G_WOOD ? art.wood_floor : g === G_INN ? art.inn_floor : art.grass;
+        const img = g === G_DIRT ? art.dirt : g === G_EDGE ? art.grass_edge : g === G_WOOD ? art.wood_floor : g === G_INN ? art.inn_floor : g === G_STONE ? art.xk_floor : g === G_BONE ? art.xk_ground : art.grass;
         const px = tx * TILE - cam.x, py = ty * TILE - cam.y;
         if (g === G_GRASS) {
           // deterministic rotate/flip per tile so the repeat doesn't read as a grid
@@ -288,6 +289,10 @@ Object.assign(Game.prototype, {
         if (o.kind !== "pond" && o.kind !== "flowers_red" && o.kind !== "flowers_orange")
           shadow(worldX, baseY, k.widthTiles * 0.8);
         this.drawSprite(art[o.kind], worldX, baseY, k.widthTiles, false);
+        if (o.kind === "house_purple") {              // the Collector's house: a skull crest
+          const img = art[o.kind], h = k.widthTiles * TILE * (img.height / img.width);
+          this.drawSkull(worldX - this.cam.x, baseY - h * 0.62 - this.cam.y, TILE * 0.42);
+        }
       }});
     }
     for (const chest of (this.world.chests || [])) {
@@ -306,7 +311,7 @@ Object.assign(Game.prototype, {
       const img = art[`${grp}_${fr}`];
       const w = cfg.ow.tiles;
       renderables.push({ sortY: e.y, draw: () => {
-        this.drawSprite(img, e.x, e.y, w, false);
+        this.drawSprite(img, e.x, e.y, w, false, cfg.battle.smooth);
       }});
     }
     const allyHere = p.party.some(m => m.id === "ally");
@@ -354,15 +359,31 @@ Object.assign(Game.prototype, {
     for (const r of renderables) r.draw();
 
     // --- minimap (hidden while a full-screen panel is up) ---
-    if (!this.ui && !this.shop && !this.dialogue && !this.naming && !this.prompt) this.drawMinimap();
+    if (!this.ui && !this.shop && !this.cardshop && !this.dialogue && !this.naming && !this.prompt) this.drawMinimap();
 
     // --- overlays ---
     if (this.ui) this.drawMenu();
     if (this.shop) this.drawShop();
+    if (this.cardshop) this.drawCardShop();
     if (this.dialogue) this.drawDialogue();
     if (this.naming) this.drawNameContact();
     if (this.prompt) this.drawPrompt();
+    if (this.sleeping) this.drawSleep();
     if (this.autosaveAnim) this.drawAutosave();
+  },
+
+  /* the inn blackout: fade to black, hold, fade back — "Resting..." at full dark */
+  drawSleep() {
+    const ctx = this.ctx, W = this.cv.width, H = this.cv.height, s = this.sleeping;
+    const half = s.dur / 2;
+    const a = s.t < half ? s.t / half : 1 - (s.t - half) / half;   // 0→1→0 triangle
+    ctx.fillStyle = "rgba(0,0,0," + Math.min(1, a * 1.2).toFixed(3) + ")";
+    ctx.fillRect(0, 0, W, H);
+    if (a > 0.55) {
+      ctx.globalAlpha = Math.min(1, (a - 0.55) / 0.45);
+      this.text("Resting…", W / 2, H / 2, { align: "center", size: 28, bold: true, color: "#cfd6ff" });
+      ctx.globalAlpha = 1;
+    }
   },
 
   /* a yes/no confirmation window with two buttons (keyboard or click) */
@@ -512,7 +533,7 @@ Object.assign(Game.prototype, {
         if (w.blocked[ty][tx] && !chestTiles.has(ty * MAP_W + tx)) col = "#16241b";
         else {
           const g = w.ground[ty][tx];
-          col = g === G_DIRT ? "#6b5836" : (g === G_WOOD || g === G_INN) ? "#6e4f33" : "#34603a";
+          col = g === G_DIRT ? "#6b5836" : (g === G_WOOD || g === G_INN) ? "#6e4f33" : g === G_STONE ? "#5a5d63" : g === G_BONE ? "#4a4233" : "#34603a";
         }
         ctx.fillStyle = col;
         ctx.fillRect(mx + tx * cell, my + ty * cell, cell, cell);
@@ -526,6 +547,8 @@ Object.assign(Game.prototype, {
     // shops (blue): shopkeeper NPCs in here, plus store-building doors in town
     for (const n of (this.npcs || [])) if (n.shop) dot(n.x / TILE, n.y / TILE - 0.5, "#4aa8ff", 3);
     for (const pt of (w.portals || [])) if (pt.to === "koro_def" || pt.to === "koro_off" || pt.to === "koro_skill") dot(pt.tx + 0.5, pt.ty, "#4aa8ff", 3);
+    // the Collector's house (purple) only counts as a shop once Elara has joined
+    if (this.hasAlly()) for (const pt of (w.portals || [])) if (pt.to === "koro_cards") dot(pt.tx + 0.5, pt.ty, "#4aa8ff", 3);
     // enemies (red)
     for (const e of (this.enemies || [])) if (e.alive) dot(e.x / TILE, e.y / TILE - 0.5, "#ff4444", 2.5);
     // current quest objective (green, gently pulsing)
@@ -573,6 +596,177 @@ Object.assign(Game.prototype, {
     else if (ui.screen === "skills") this.drawSkillsScreen();
     else if (ui.screen === "equip") this.drawEquipScreen();
     else if (ui.screen === "quests") this.drawQuestsScreen();
+    else if (ui.screen === "bestiary") this.drawBestiaryScreen();
+  },
+
+  /* a single monster card: rarity-tinted frame, battle-sprite portrait, name.
+   * If `hidden`, draws a face-down "???" card instead. */
+  drawCard(x, y, w, h, type, opt) {
+    const ctx = this.ctx, o = opt || {};
+    const rarity = type ? CARD_INFO[type].rarity : "common";
+    const tint = o.hidden ? "#3a3550" : CARD_RARITY_COLOR[rarity];
+    ctx.save();
+    // card body
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, o.hidden ? "#20203a" : "#252a44");
+    g.addColorStop(1, o.hidden ? "#15152a" : "#161a30");
+    ctx.fillStyle = g;
+    ctx.strokeStyle = tint; ctx.lineWidth = o.sel ? 3.5 : 2;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 9); ctx.fill(); ctx.stroke();
+
+    if (o.hidden) {
+      this.text("?", x + w / 2, y + h / 2 + 14, { size: 44, bold: true, align: "center", color: "#5a5680" });
+      this.text("UNDISCOVERED", x + w / 2, y + h - 14, { size: 11, bold: true, align: "center", color: "#6a6690" });
+      ctx.restore();
+      return;
+    }
+    // art window
+    const aw = w - 22, ah = h * 0.5, ax = x + 11, ay = y + 28;
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath(); ctx.roundRect(ax, ay, aw, ah, 6); ctx.fill();
+    const cfg = ENEMY_TYPES[type], key = cfg.battle.idle + "_0", img = this.art[key];
+    if (img) {
+      const scale = Math.min(aw / img.width, ah / img.height) * 0.9;
+      const iw = img.width * scale, ih = img.height * scale;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, ax + (aw - iw) / 2, ay + (ah - ih) / 2, iw, ih);
+    }
+    // rarity tag (top) + name (under art)
+    this.text(CARD_RARITY_LABEL[rarity], x + w / 2, y + 20, { size: 11, bold: true, align: "center", color: tint });
+    this.text(cfg.name, x + w / 2, ay + ah + 22, { size: 16, bold: true, align: "center", color: "#fff3c8" });
+    if (o.count) this.text("×" + o.count, x + w - 12, y + h - 12, { size: 13, bold: true, align: "right", color: "#9cf0a0" });
+    ctx.restore();
+  },
+
+  /* ----------------------------- bestiary ------------------------------- */
+  drawBestiaryScreen() {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player;
+    const x = 40, y = 36, w = W - 80, h = H - 110;
+    this.drawWindow(x, y, w, h);
+    this.text("BESTIARY", x + 28, y + 44, { size: 24, bold: true, color: "#ffe9a0" });
+    const owned = CARD_MONSTERS.filter(t => (p.cards || {})[t]).length;
+    this.text(owned + " / " + CARD_MONSTERS.length + " DISCOVERED",
+      x + w - 28, y + 44, { size: 16, align: "right", color: "#9fd8ff" });
+
+    // cards laid out in a grid (wraps to keep each card large); the selected
+    // card's stats fill the panel below
+    const n = CARD_MONSTERS.length, pad = 16, gridX = x + 28, gridY = y + 74;
+    const rows = Math.ceil(n / 5), perRow = Math.ceil(n / rows), rowGap = 14;
+    const cardW = Math.min(150, (w - 56 - (perRow - 1) * pad) / perRow);
+    const cardH = Math.round(cardW * (rows > 1 ? 1.0 : 1.32));   // squarer when stacked so 2 rows + detail fit
+    CARD_MONSTERS.forEach((t, i) => {
+      const col = i % perRow, row = (i / perRow) | 0;
+      const cx = gridX + col * (cardW + pad), cy = gridY + row * (cardH + rowGap);
+      const have = !!(p.cards || {})[t];
+      this.drawCard(cx, cy, cardW, cardH, t, { hidden: !have, sel: i === this.ui.sel, count: have ? p.cards[t] : 0 });
+    });
+
+    // detail panel for the highlighted monster (compact, sits under the grid)
+    const sel = CARD_MONSTERS[this.ui.sel], have = !!(p.cards || {})[sel];
+    const gridBottom = gridY + rows * cardH + (rows - 1) * rowGap;
+    const dy = gridBottom + 18, dh = y + h - 50 - dy, dx = x + 28, dw = w - 56;
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath(); ctx.roundRect(dx, dy, dw, dh, 8); ctx.fill();
+    if (!have) {
+      this.text("No card yet. Buy packs at the Collector's house in Koro.",
+        dx + dw / 2, dy + dh / 2, { size: 17, align: "center", color: "#9aa3c4" });
+    } else {
+      // progressive study: 1 card = name/desc/rarity, 3 = +HP, 5 = +full stats
+      const cfg = ENEMY_TYPES[sel], info = CARD_INFO[sel], count = p.cards[sel];
+      this.text(cfg.name, dx + 24, dy + 32, { size: 22, bold: true, color: "#fff3c8" });
+      this.text(CARD_RARITY_LABEL[info.rarity], dx + dw - 24, dy + 32,
+        { size: 15, bold: true, align: "right", color: CARD_RARITY_COLOR[info.rarity] });
+      // stat line — each stat needs a minimum card count to be revealed
+      const stats = [["HP", cfg.hp, 3], ["ATK", cfg.atk, 5], ["DEF", cfg.def, 5], ["EXP", cfg.exp, 5], ["GOLD", cfg.gold, 5]];
+      stats.forEach((s, i) => {
+        const sx = dx + 24 + i * ((dw - 48) / stats.length), known = count >= s[2];
+        this.text(s[0], sx, dy + 58, { size: 13, color: known ? "#9fd8ff" : "#5f6680" });
+        this.text(known ? "" + s[1] : "???", sx, dy + 78, { size: 20, bold: true, color: known ? "#eef1ff" : "#6a7194" });
+      });
+      this.text(info.lore, dx + 24, dy + 106, { size: 15, color: "#cfd6ff" });
+      // owned count + what the next copies unlock
+      const hint = count < 3 ? "Collect 3 to reveal HP · 5 for full stats"
+                 : count < 5 ? "Collect 5 to reveal ATK, DEF, EXP & Gold"
+                 : "Fully studied";
+      this.text("Cards owned: " + count, dx + 24, dy + dh - 16, { size: 14, color: "#9cf0a0" });
+      this.text(hint, dx + dw - 24, dy + dh - 16, { size: 14, align: "right", color: count >= 5 ? "#9cf0a0" : "#c8b46a" });
+    }
+    this.text("← →  select        ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+  },
+
+  /* the Monster Cards purchase screen (purple house). Lists packs; a pack-opening
+   * reveal panel slides over it after a purchase. */
+  drawCardShop() {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player;
+    ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, W, H);
+    const bw = Math.min(620, W - 80), bh = 150 + CARD_PACKS.length * 76;
+    const bx = (W - bw) / 2, by = Math.max(40, (H - bh) / 2);
+    this.drawWindow(bx, by, bw, bh);
+    this.text("MONSTER CARDS", bx + 28, by + 46, { size: 24, bold: true, color: "#ffe9a0" });
+    this.text("GOLD  " + p.gold, bx + bw - 28, by + 46, { size: 20, align: "right", color: "#ffd86a" });
+
+    CARD_PACKS.forEach((pk, i) => {
+      const ry = by + 78 + i * 76, rx = bx + 50, rw = bw - 78;
+      const on = this.cardshop.sel === i, poor = p.gold < pk.price;
+      ctx.fillStyle = on ? "rgba(120,150,230,0.32)" : "rgba(0,0,0,0.25)";
+      ctx.strokeStyle = on ? "#ffe9a0" : "rgba(150,165,230,0.5)"; ctx.lineWidth = on ? 2.5 : 1.5;
+      ctx.beginPath(); ctx.roundRect(rx, ry, rw, 64, 7); ctx.fill(); ctx.stroke();
+      if (on) this.cursor(rx - 18, ry + 32);
+      this.text(pk.name, rx + 16, ry + 26, { size: 19, bold: true, color: "#eef1ff" });
+      this.text(pk.desc, rx + 16, ry + 48, { size: 13, color: "#bcd0f0" });
+      this.text(pk.price + "g", rx + rw - 16, ry + 36, { size: 18, align: "right", bold: true, color: poor ? "#e88" : "#ffd86a" });
+    });
+    this.text("ENTER  buy        ESC  leave", W / 2, by + bh - 22, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+
+    if (this.cardshop.reveal) this.drawCardReveal(this.cardshop.reveal);
+  },
+
+  /* a small procedural skull crest (bone dome + jaw, dark sockets with red glints) */
+  drawSkull(cx, cy, s) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.fillStyle = "#ece6d6"; ctx.strokeStyle = "#15110c"; ctx.lineWidth = Math.max(1.5, s * 0.07);
+    // cranium dome down into the cheekbones + jaw
+    ctx.beginPath();
+    ctx.arc(cx, cy, s, Math.PI * 0.86, Math.PI * 0.14, false);
+    ctx.lineTo(cx + s * 0.66, cy + s * 0.92);
+    ctx.lineTo(cx + s * 0.42, cy + s * 1.18);
+    ctx.lineTo(cx - s * 0.42, cy + s * 1.18);
+    ctx.lineTo(cx - s * 0.66, cy + s * 0.92);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // eye sockets
+    ctx.fillStyle = "#120e09";
+    ctx.beginPath(); ctx.ellipse(cx - s * 0.42, cy + s * 0.06, s * 0.3, s * 0.35, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx + s * 0.42, cy + s * 0.06, s * 0.3, s * 0.35, 0, 0, 7); ctx.fill();
+    // red glints
+    ctx.fillStyle = "rgba(232,70,70,0.95)";
+    ctx.beginPath(); ctx.arc(cx - s * 0.4, cy + s * 0.12, s * 0.1, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + s * 0.4, cy + s * 0.12, s * 0.1, 0, 7); ctx.fill();
+    // nasal cavity
+    ctx.fillStyle = "#120e09";
+    ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.36); ctx.lineTo(cx - s * 0.13, cy + s * 0.64); ctx.lineTo(cx + s * 0.13, cy + s * 0.64); ctx.closePath(); ctx.fill();
+    // teeth
+    ctx.strokeStyle = "#120e09"; ctx.lineWidth = Math.max(1, s * 0.045);
+    ctx.beginPath(); ctx.moveTo(cx - s * 0.42, cy + s * 0.84); ctx.lineTo(cx + s * 0.42, cy + s * 0.84); ctx.stroke();
+    for (let i = -2; i <= 2; i++) { const tx = cx + i * s * 0.2; ctx.beginPath(); ctx.moveTo(tx, cy + s * 0.84); ctx.lineTo(tx, cy + s * 1.16); ctx.stroke(); }
+    ctx.restore();
+  },
+
+  drawCardReveal(rev) {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.72)"; ctx.fillRect(0, 0, W, H);
+    this.text("YOU OPEN THE PACK!", W / 2, 70, { size: 26, bold: true, align: "center", color: "#ffe9a0" });
+    const cards = rev.cards, n = cards.length, pad = 18;
+    const cardW = Math.min(210, (W - 80 - (n - 1) * pad) / n), cardH = cardW * 1.32;
+    const totalW = n * cardW + (n - 1) * pad, sx = (W - totalW) / 2, sy = (H - cardH) / 2 - 10;
+    cards.forEach((t, i) => {
+      const cx = sx + i * (cardW + pad);
+      this.drawCard(cx, sy, cardW, cardH, t, {});
+      if (rev.isNew.includes(t)) this.text("NEW!", cx + cardW / 2, sy - 10, { size: 15, bold: true, align: "center", color: "#9cf0a0" });
+    });
+    if (rev.isNew.length) this.text("New bestiary entries added!", W / 2, sy + cardH + 36, { size: 16, align: "center", color: "#9cf0a0" });
+    this.text("ENTER  continue", W / 2, H - 44, { align: "center", size: 16, color: "rgba(230,235,255,0.8)" });
   },
 
   /* ----------------------------- quests screen --------------------------- */

@@ -14,6 +14,7 @@ const RUN_MULT = 1.8;
 
 /* ground tile ids */
 const G_GRASS = 0, G_DIRT = 1, G_EDGE = 2, G_WOOD = 3, G_INN = 4;
+const G_STONE = 5, G_BONE = 6;   // Xal'Korr: cobble streets over bone-strewn earth
 
 /* ------------------------------- asset list ------------------------------ */
 const ASSETS = {
@@ -56,6 +57,15 @@ const ASSETS = {
   knight_sword: "assets/knight_sword.png",
   chain_mail: "assets/chain_mail.png",
   plate_armor: "assets/plate_armor.png",
+  // Xal'Korr, City of Bone — ground tiles + bone-yard decorations
+  xk_ground: "assets/xk_ground.png", xk_floor: "assets/xk_floor.png",
+  xk_gate: "assets/xk_gate.png", xk_skull_totem: "assets/xk_skull_totem.png",
+  xk_skull_big: "assets/xk_skull_big.png", xk_bone_bundle: "assets/xk_bone_bundle.png",
+  xk_barrel: "assets/xk_barrel.png", xk_statue: "assets/xk_statue.png",
+  xk_gravestone: "assets/xk_gravestone.png", xk_tomb: "assets/xk_tomb.png",
+  xk_skull_pile: "assets/xk_skull_pile.png", xk_deadtree: "assets/xk_deadtree.png",
+  xk_boulder: "assets/xk_boulder.png", xk_reaper: "assets/xk_reaper.png",
+  xk_skull_sign: "assets/xk_skull_sign.png", xk_candles: "assets/xk_candles.png",
 };
 // enemy animation frame counts, keyed by sprite-group name
 const LIZ_ANIMS   = { liz_idle: 3, liz_sleep: 3, liz_roar: 4, liz_attack: 4, liz_hurt: 3, liz_death: 4 };
@@ -65,7 +75,12 @@ const TROLL_ANIMS = { troll_idle: 4, troll_walk: 6, troll_attack: 3, troll_hurt:
 const MERC_ANIMS  = { merc_idle: 8, merc_thrust: 8, merc_hurt: 4, merc_die: 6 };
 // Gray Wolf — sliced from a 4x4 sheet (idle / charge / attack / hurt+dead)
 const WOLF_ANIMS  = { wolf_idle: 4, wolf_charge: 4, wolf_attack: 4, wolf_hurt: 2, wolf_death: 2 };
-const ANIM_FRAMES = { ...LIZ_ANIMS, ...GOB_ANIMS, ...TROLL_ANIMS, ...MERC_ANIMS, ...WOLF_ANIMS };  // group -> frame count
+// Xal'Korr skeletons — sliced from the bone-legion sheet (see slice_skeletons.py)
+const SKW_ANIMS   = { skw_idle: 4, skw_walk: 5, skw_attack: 5, skw_hurt: 5, skw_death: 5 };  // warrior
+const SKM_ANIMS   = { skm_idle: 5, skm_walk: 5, skm_cast: 5,   skm_hurt: 4, skm_death: 5 };  // mage
+const SKA_ANIMS   = { ska_idle: 5, ska_walk: 5, ska_shoot: 5,  ska_hurt: 5, ska_death: 4 };  // archer
+const ANIM_FRAMES = { ...LIZ_ANIMS, ...GOB_ANIMS, ...TROLL_ANIMS, ...MERC_ANIMS, ...WOLF_ANIMS,
+                      ...SKW_ANIMS, ...SKM_ANIMS, ...SKA_ANIMS };  // group -> frame count
 for (const [g, n] of Object.entries(ANIM_FRAMES))
   for (let i = 0; i < n; i++) ASSETS[`${g}_${i}`] = `assets/${g}_${i}.png`;
 for (const s of ["skill_fire", "skill_shield", "skill_bolt", "skill_heal", "skill_ember", "skill_inferno", "skill_jolt", "skill_mend"]) ASSETS[s] = `assets/${s}.png`;
@@ -144,9 +159,11 @@ const ENEMY_TYPES = {
     battle: { idle: "wolf_idle", attack: "wolf_attack", hurt: "wolf_hurt", death: "wolf_death", h: 0.182, flip: false },
   },
   troll: {
-    name: "Troll", hp: 200, atk: 22, def: 12, exp: 150, gold: 90, boss: true,
+    name: "Troll", hp: 155, atk: 17, def: 12, exp: 150, gold: 90, boss: true,
     intro: "The Troll swipes at you!",
-    skillMeter: 35,
+    skillMeter: 53,                                   // fires its skills 2/3 as often
+    comboPunish: true,                                // 4 hero Attacks in a row -> Boulder Throw + Frenzy
+    bossTitle: "Warden of Greenwood Forest",          // epithet shown above the boss name banner
     skills: [
       { name: "Boulder Throw", kind: "hit", power: 1.7 },
       { name: "Enrage", kind: "buff", buff: 1.2 },
@@ -165,6 +182,48 @@ const ENEMY_TYPES = {
     ],
     ow: { idle: "merc_idle", alert: "merc_thrust", tiles: 2.0 },
     battle: { idle: "merc_idle", attack: "merc_thrust", hurt: "merc_hurt", death: "merc_die", h: 0.34, flip: false },
+  },
+  // --- the bone legion of Xal'Korr ---
+  skeleton_warrior: {
+    name: "Skeleton Warrior", hp: 120, atk: 25, def: 15, exp: 78, gold: 55,
+    intro: "A Skeleton Warrior rattles forward, sword raised!",
+    skillMeter: 26,
+    skills: [
+      { name: "Bone Cleave", kind: "hit", power: 1.9 },
+      { name: "Shield Bash", kind: "double", power: 0.9 },
+      { name: "Battle Fury", kind: "buff", buff: 1.25 },
+    ],
+    ow: { idle: "skw_idle", alert: "skw_attack", tiles: 2.0 },
+    battle: { idle: "skw_idle", attack: "skw_attack", hurt: "skw_hurt", death: "skw_death", h: 0.25, flip: true, smooth: true },
+  },
+  skeleton_archer: {
+    name: "Skeleton Archer", hp: 88, atk: 27, def: 9, exp: 76, gold: 60,
+    intro: "A Skeleton Archer nocks an arrow of bone!",
+    skillMeter: 22,
+    skills: [
+      { name: "Piercing Shot", kind: "hit", power: 2.1 },
+      { name: "Rapid Volley", kind: "double", power: 1.0 },
+    ],
+    ow: { idle: "ska_idle", alert: "ska_shoot", tiles: 2.0 },
+    battle: { idle: "ska_idle", attack: "ska_shoot", hurt: "ska_hurt", death: "ska_death", h: 0.25, flip: true, smooth: true },
+  },
+  skeleton_mage: {
+    name: "Skeleton Mage", hp: 150, atk: 28, def: 13, exp: 92, gold: 75,
+    intro: "A Skeleton Mage levels its glowing staff!",
+    skillMeter: 14,                                   // charges fast — casts constantly
+    // a deep spellbook: the meter fires a random one each time it fills
+    skills: [
+      { name: "Dark Bolt",       kind: "hit",    power: 1.8 },
+      { name: "Bone Spear",      kind: "hit",    power: 2.2 },
+      { name: "Shadow Lance",    kind: "hit",    power: 2.5 },
+      { name: "Withering Hex",   kind: "double", power: 1.1 },
+      { name: "Curse of Frailty", kind: "double", power: 1.3 },
+      { name: "Soul Drain",      kind: "heal",   heal: 0.30 },
+      { name: "Dread Empower",   kind: "buff",   buff: 1.30 },
+      { name: "Necrotic Burst",  kind: "hit",    power: 2.0 },
+    ],
+    ow: { idle: "skm_idle", alert: "skm_cast", tiles: 2.0 },
+    battle: { idle: "skm_idle", attack: "skm_cast", hurt: "skm_hurt", death: "skm_death", h: 0.27, flip: true, smooth: true },
   },
 };
 
@@ -202,12 +261,36 @@ const SHOPS = {
   },
 };
 
+/* Monster Trading Cards — buyable in packs at the purple house once Elara joins.
+ * Owned cards populate the Bestiary (in the ESC menu). Each foe in ENEMY_TYPES is
+ * collectible; rarity weights the random pack rolls and tints the card frame. */
+const CARD_INFO = {
+  lizard:    { rarity: "common", lore: "A grass-stalking reptile. Quick to bite, quicker to flee." },
+  goblin:    { rarity: "common", lore: "A scrappy raider of the forest paths. Fights dirty." },
+  wolf:      { rarity: "rare",   lore: "A gaunt gray hunter. It runs the tree-line in silence." },
+  mercenary: { rarity: "rare",   lore: "A blade for hire, loyal only to the coin in hand." },
+  troll:     { rarity: "epic",   lore: "Warden of Greenwood — a mountain of muscle and spite." },
+  skeleton_warrior: { rarity: "common", lore: "Risen swordsman of Xal'Korr. Death only sharpened its discipline." },
+  skeleton_archer:  { rarity: "rare",   lore: "A bone-fletched marksman. Its arrows never tire, and neither does it." },
+  skeleton_mage:    { rarity: "epic",   lore: "A robed caster wreathed in violet death-magic. Spell after spell, endlessly." },
+};
+const CARD_MONSTERS = ["lizard", "goblin", "wolf", "mercenary", "troll",
+  "skeleton_warrior", "skeleton_archer", "skeleton_mage"];
+const CARD_RARITY_COLOR = { common: "#9fb4e8", rare: "#7fd0ff", epic: "#ffd479" };
+const CARD_RARITY_LABEL = { common: "COMMON", rare: "RARE", epic: "EPIC" };
+const CARD_PACKS = [
+  { id: "common", name: "Monster Card Pack", price: 60,  count: 3, desc: "Three random monster cards.",
+    weights: { common: 10, rare: 4, epic: 1 } },
+  { id: "deluxe", name: "Deluxe Card Pack",  price: 150, count: 5, desc: "Five cards — better odds for rare beasts.",
+    weights: { common: 7, rare: 6, epic: 2 } },
+];
+
 /* the game's title — change this string to rename the game */
 const GAME_TITLE = "Game";
 const GAME_SUBTITLE = "";
 const AREA_NAME = "Greenwood Forest";
 
-const MAIN_MENU = ["Skills", "Equip", "Status", "Quests", "Save"];
+const MAIN_MENU = ["Skills", "Equip", "Status", "Bestiary", "Quests", "Save"];
 
 /* quest log entries — added/completed as the story progresses (see game.js). */
 const QUESTS = {
@@ -258,4 +341,20 @@ const KINDS = {
   house_green:    { widthTiles: 3.4, solid: true, feet: 1.9, blockW: 3, blockH: 2 },
   house_yellow:   { widthTiles: 3.4, solid: true, feet: 1.9, blockW: 3, blockH: 2 },
   house_purple:   { widthTiles: 3.4, solid: true, feet: 1.9, blockW: 3, blockH: 2 },
+  // Xal'Korr, City of Bone — gate is non-solid (build() blocks its pillars so the
+  // archway stays walkable); the rest are bone-yard props.
+  xk_gate:        { widthTiles: 3.4, solid: false, feet: 1.9 },
+  xk_skull_totem: { widthTiles: 0.95, solid: true, feet: 0.95 },
+  xk_skull_big:   { widthTiles: 1.1,  solid: true, feet: 0.95 },
+  xk_bone_bundle: { widthTiles: 1.0,  solid: true, feet: 0.95 },
+  xk_barrel:      { widthTiles: 0.85, solid: true, feet: 0.95 },
+  xk_statue:      { widthTiles: 1.3,  solid: true, feet: 0.95 },
+  xk_gravestone:  { widthTiles: 1.0,  solid: true, feet: 0.95 },
+  xk_tomb:        { widthTiles: 2.6,  solid: true, feet: 1, blockW: 2, blockH: 1 },
+  xk_skull_pile:  { widthTiles: 2.1,  solid: true, feet: 1, blockW: 2, blockH: 1 },
+  xk_deadtree:    { widthTiles: 1.6,  solid: true, feet: 0.55 },
+  xk_boulder:     { widthTiles: 1.9,  solid: true, feet: 0.9, blockW: 2, blockH: 1 },
+  xk_reaper:      { widthTiles: 1.7,  solid: true, feet: 0.6 },
+  xk_skull_sign:  { widthTiles: 1.7,  solid: true, feet: 0.95 },
+  xk_candles:     { widthTiles: 0.7,  solid: false, feet: 1 },
 };

@@ -205,21 +205,22 @@ class GameAudio {
       // you-died screen: a slow, dark C-minor dirge — sparse descending melody,
       // sustained dissonant pads and a tolling low kick
       death: {
-        stepDur: 0.5, type: "triangle", bassType: "sine", vol: 0.11, bvol: 0.13,
-        // a 32-step C-minor funeral dirge: a slow mournful lament that descends and
-        // resolves through the leading tone, over deep drone-pads and a tolling bell
-        lead: [60, null, null, 58, 56, null, 55, null, 53, null, 51, null, 50, null, null, null,
-               55, null, null, 56, 55, null, 53, null, 51, null, 50, null, 47, null, 48, null],
-        bass: [36, null, null, null, null, null, null, null, 41, null, null, null, null, null, null, null,
-               44, null, null, null, null, null, null, null, 43, null, null, null, null, null, null, null],
-        // i – iv – bVI – V(dominant): each chord carries a sub-octave root for weight
-        chords: [[24, 36, 39, 43], null, null, null, null, null, null, null,
+        stepDur: 0.48, type: "sawtooth", bassType: "sine", vol: 0.2, bvol: 0.22,
+        // a louder, more dissonant C-minor funeral dirge: a mournful lament that
+        // twists down through a tritone before resolving on the leading tone, over
+        // minor-2nd cluster pads, a tolling bell and a deep crypt-door tom
+        lead: [60, null, 63, 58, 56, null, 54, null, 53, null, 51, null, 50, null, 42, null,
+               55, null, 56, 55, 54, null, 53, null, 51, null, 50, null, 48, 47, 48, null],
+        bass: [36, null, null, null, null, null, null, null, 41, null, null, null, 42, null, null, null,
+               44, null, null, null, null, null, null, null, 43, null, null, null, 36, null, null, null],
+        // i(add b9) – iv – tritone bVI – V: each cluster carries a minor-2nd rub for dread
+        chords: [[24, 36, 39, 43, 49], null, null, null, null, null, null, null,
                  [29, 41, 44, 48], null, null, null, null, null, null, null,
-                 [32, 44, 47, 51], null, null, null, null, null, null, null,
-                 [31, 43, 47, 50], null, null, null, null, null, null, null],
-        chordLen: 8, padVol: 0.07,
-        drums: "k.......c.......k.......k.......",
-        drumVol: 0.45,
+                 [30, 42, 45, 48, 49], null, null, null, null, null, null, null,
+                 [31, 43, 47, 50, 53], null, null, null, null, null, null, null],
+        chordLen: 8, padVol: 0.12,
+        drums: "k......ck...k...k......ck...kc..",
+        drumVol: 0.75,
       },
       // Koro town: upbeat and bright — a cheerful D-major hook over a I–V–vi–IV
       // walking bass with a lively backbeat
@@ -267,7 +268,11 @@ class GameAudio {
     if (!this.ctx || !this._track) { this._timer = null; return; }
     const tr = this._tracks()[this._track];
     const len = tr.lead.length;
-    while (this._nextTime < this.ctx.currentTime + 0.12) {
+    // If a main-thread stall (battle FX, GC, a heavy frame) delayed this tick
+    // past our lookahead, resync to "now" — otherwise we'd schedule notes in the
+    // past, which the audio engine drops/bunches up: that was the mid-fight cutout.
+    if (this._nextTime < this.ctx.currentTime) this._nextTime = this.ctx.currentTime + 0.03;
+    while (this._nextTime < this.ctx.currentTime + 0.25) {   // wider lookahead rides out stalls
       const i = this._step % len, t = this._nextTime;
       const ld = tr.lead[i], bs = tr.bass[i % tr.bass.length];
       if (ld != null) {

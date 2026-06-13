@@ -6,7 +6,7 @@ Object.assign(Game.prototype, {
     this.state = "battle"; this.fade = 0;
     const cfg = ENEMY_TYPES[target.type];
     const am = this.player.party.find(m => m.id === "ally");   // Elara fights alongside the hero
-    const m = { casual: 0.45, normal: 1, hard: 1.30, hardcore: 1.55 }[this.difficulty] ?? 1;
+    const m = { casual: 0.45, normal: 1, hard: 1.25, hardcore: 1.40 }[this.difficulty] ?? 1;
     const eHp = Math.max(1, Math.round(cfg.hp * m));
     const eAtk = Math.max(1, Math.round(cfg.atk * m));
     this.battle = {
@@ -29,6 +29,8 @@ Object.assign(Game.prototype, {
       phase: "intro", step: "", timer: 1100, msg: cfg.intro,
       heroKO: false,
       heroLunge: 0, eLunge: 0, heroHurt: 0, allyLunge: 0, enemySkill: null, skillFlash: null,
+      heroAttackStreak: 0,   // consecutive hero Attacks — 4 triggers the troll's combo punish
+
       defending: false, allyDefending: false, shieldBuff: false, allyShieldBuff: false,
       floats: [], animT: 0, fx: null, sub: null,
     };
@@ -87,7 +89,12 @@ Object.assign(Game.prototype, {
   /* resolve a charged enemy skill (called at the impact frame) */
   applyEnemySkill(sk) {
     const b = this.battle, e = b.enemy, nm = "The " + e.name;
-    if (sk.kind === "heal") {
+    if (sk.kind === "combo") {                       // Boulder Throw, then a Frenzy that buffs future turns
+      const who = b.heroKO ? "ally" : (b.ally && !b.ally.ko && Math.random() < 0.4 ? "ally" : "hero");
+      this.enemyHit(who, Math.round(e.atk * (sk.power || 1.7)), true);
+      e.atk = Math.round(e.atk * (sk.buff || 1.2));
+      this.battleMsg(nm + " hurls a boulder and flies into a frenzy!");
+    } else if (sk.kind === "heal") {
       const amt = Math.round(e.maxhp * (sk.heal || 0.25));
       const heal = Math.min(amt, e.maxhp - e.hp); e.hp += heal;
       this.addFloat("enemy", "+" + heal, "#9cf0a0");
@@ -312,9 +319,10 @@ Object.assign(Game.prototype, {
     if (ally) b.allyDefending = false; else b.defending = false;
     if (cmd === "Attack") {
       if (ally) { b.phase = "ally_attack"; b.step = "lunge"; b.timer = 260; b.allyLunge = 0; }
-      else { b.phase = "hero_attack"; b.step = "lunge"; b.timer = 260; b.heroLunge = 0; }
+      else { b.phase = "hero_attack"; b.step = "lunge"; b.timer = 260; b.heroLunge = 0; b.heroAttackStreak++; }
     }
     else if (cmd === "Defend") {
+      if (!ally) b.heroAttackStreak = 0;
       if (ally) {
         b.allyDefending = true;
         this.battleMsg(b.ally.name + " takes a guarded stance.");
@@ -332,6 +340,7 @@ Object.assign(Game.prototype, {
       b.phase = "submenu"; b.sub = { type: "skill", sel: 0, list: eq };
     }
     else if (cmd === "Run") {
+      if (!ally) b.heroAttackStreak = 0;
       if (Math.random() < 0.6) { this.battleMsg("Got away safely!"); b.phase = "flee"; b.timer = 900; }
       else { this.battleMsg("Couldn't escape!"); b.phase = "enemy_pre"; b.timer = 750; }
     }
@@ -347,6 +356,7 @@ Object.assign(Game.prototype, {
     const caster = ally ? b.ally : p;
     if (caster.mp < sk.mp) { this.battleMsg("Not enough MP for " + sk.name + "!"); return; }
     caster.mp -= sk.mp; b.sub = null; b.skill = sk;
+    if (!ally) b.heroAttackStreak = 0;            // a skill breaks the attack streak
     this.stats.skillUses[sk.id] = (this.stats.skillUses[sk.id] || 0) + 1;
     if (sk.kind === "shield") {
       if (ally) { b.allyShieldBuff = true; } else { b.shieldBuff = true; }
@@ -464,8 +474,15 @@ Object.assign(Game.prototype, {
         break;
       case "enemy_pre":
         if (b.timer <= 0) {
+          // punish turtling: four hero Attacks in a row earns a Boulder Throw + Frenzy combo
+          if (b.heroAttackStreak >= 4 && b.cfg.comboPunish) {
+            b.heroAttackStreak = 0;
+            b.enemySkill = { name: "Boulder Throw & Frenzy", kind: "combo", power: 1.7, buff: 1.2 };
+            b.phase = "enemy_skill"; b.step = "wind"; b.timer = 1680; b.eLunge = 0;
+            this.battleMsg("The " + b.enemy.name + " has had enough!");
+          }
           // when the hidden meter is full, the enemy unleashes one of its two skills
-          if (b.enemy.meter >= b.enemy.meterMax && b.cfg.skills && b.cfg.skills.length) {
+          else if (b.enemy.meter >= b.enemy.meterMax && b.cfg.skills && b.cfg.skills.length) {
             b.enemy.meter = 0;
             b.enemy.meterMax = Math.round(b.enemy.meterMax * 1.5);   // each use makes the next cost 50% more
             b.enemySkill = b.cfg.skills[(Math.random() * b.cfg.skills.length) | 0];
@@ -510,9 +527,10 @@ Object.assign(Game.prototype, {
     }
   },
 
-  drawBattleSprite(img, cx, baseY, targetH, flip) {
+  drawBattleSprite(img, cx, baseY, targetH, flip, smooth) {
     const ctx = this.ctx, w = targetH * (img.width / img.height);
     ctx.save();
+    if (smooth) ctx.imageSmoothingEnabled = true;   // bilinear scale for low-res art (skeletons)
     if (flip) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
     ctx.drawImage(img, cx - w / 2, baseY - targetH, w, targetH);
     ctx.restore();
@@ -629,7 +647,7 @@ Object.assign(Game.prototype, {
       else { grp = A.idle; fr = ((b.animT / 180) | 0) % ANIM_FRAMES[grp]; }
       const eAlpha = b.enemy.dead ? Math.max(0, 1 - b.enemy.deathT / 1300) : 1;
       ctx.globalAlpha = eAlpha;
-      this.drawBattleSprite(art[`${grp}_${fr}`], exX + eOff + jitter, eBaseY, H * A.h, A.flip);
+      this.drawBattleSprite(art[`${grp}_${fr}`], exX + eOff + jitter, eBaseY, H * A.h, A.flip, A.smooth);
       ctx.globalAlpha = 1;
     }
 
@@ -716,12 +734,14 @@ Object.assign(Game.prototype, {
       ctx.fillStyle = `rgba(${col},${0.32 * fade})`; ctx.fillRect(0, 0, W, H);
     }
 
-    // --- boss banner (top): name in big text + a wide red HP bar ---
+    // --- boss banner (top): small epithet, big name, then a wide red HP bar ---
     const boss = b.cfg.boss;
     if (boss && b.phase !== "victory" && b.phase !== "levelup") {
-      const bw = Math.min(W - 120, 720), bx = (W - bw) / 2, bh = 22, byr = 56;
-      this.text("WARDEN OF GREENWOOD FOREST", W / 2, 42,
-        { align: "center", size: Math.min(34, W * 0.034), bold: true, color: "#ff5a5a" });
+      const bw = Math.min(W - 120, 720), bx = (W - bw) / 2, bh = 22, byr = 80;
+      if (b.cfg.bossTitle)                            // epithet line above the name
+        this.text(b.cfg.bossTitle, W / 2, 30, { align: "center", size: 16, color: "#e6d2b0" });
+      this.text(b.enemy.name.toUpperCase(), W / 2, 64,
+        { align: "center", size: Math.min(40, W * 0.046), bold: true, color: "#f4ead2" });
       ctx.fillStyle = "rgba(0,0,0,0.6)";
       ctx.beginPath(); ctx.roundRect(bx, byr, bw, bh, 6); ctx.fill();
       const frac = Math.max(0, b.enemy.hp / b.enemy.maxhp);
@@ -735,7 +755,7 @@ Object.assign(Game.prototype, {
 
     // --- message bar (top, dropped below the boss banner when present) ---
     if (b.msg) {
-      const my = boss ? 92 : 24;
+      const my = boss ? 116 : 24;
       this.drawWindow(40, my, W - 80, 56);
       this.text(b.msg, W / 2, my + 36, { align: "center", size: 20, color: "#eef1ff" });
     }
