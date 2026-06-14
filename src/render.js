@@ -649,23 +649,45 @@ Object.assign(Game.prototype, {
     this.text(owned + " / " + CARD_MONSTERS.length + " DISCOVERED",
       x + w - 28, y + 44, { size: 16, align: "right", color: "#9fd8ff" });
 
-    // cards laid out in a grid (wraps to keep each card large); the selected
-    // card's stats fill the panel below
-    const n = CARD_MONSTERS.length, pad = 16, gridX = x + 28, gridY = y + 74;
-    const rows = Math.ceil(n / 5), perRow = Math.ceil(n / rows), rowGap = 14;
-    const cardW = Math.min(150, (w - 56 - (perRow - 1) * pad) / perRow);
-    const cardH = Math.round(cardW * (rows > 1 ? 1.0 : 1.32));   // squarer when stacked so 2 rows + detail fit
+    // the detail panel is pinned to the bottom at a fixed height (never crushed);
+    // the card grid scrolls in the space above it, following the selection.
+    const dh = 150, dx = x + 28, dw = w - 56, dy = y + h - 16 - dh;
+
+    const n = CARD_MONSTERS.length, cols = 5, pad = 16, rowGap = 14;
+    this.ui.cols = cols;                               // keep keyboard nav in sync
+    const gridX = x + 28, gridY = y + 74, viewH = dy - 16 - gridY;
+    const cardW = Math.min(150, (w - 56 - (cols - 1) * pad) / cols);
+    const cardH = Math.round(cardW * 1.16);
+    const rowH = cardH + rowGap, rows = Math.ceil(n / cols);
+    const totalH = rows * rowH - rowGap, maxScroll = Math.max(0, totalH - viewH);
+    // scroll so the selected row stays visible (clamped to the content)
+    let scroll = Math.max(0, Math.min(maxScroll, this._bestScroll || 0));
+    const selTop = ((this.ui.sel / cols) | 0) * rowH, selBot = selTop + cardH;
+    if (selTop < scroll) scroll = selTop;
+    else if (selBot > scroll + viewH) scroll = selBot - viewH;
+    scroll = Math.max(0, Math.min(maxScroll, scroll));
+    this._bestScroll = scroll;
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x + 18, gridY - 8, w - 36, viewH + 16); ctx.clip();
     CARD_MONSTERS.forEach((t, i) => {
-      const col = i % perRow, row = (i / perRow) | 0;
-      const cx = gridX + col * (cardW + pad), cy = gridY + row * (cardH + rowGap);
+      const cx = gridX + (i % cols) * (cardW + pad), cy = gridY + ((i / cols) | 0) * rowH - scroll;
+      if (cy + cardH < gridY - 12 || cy > gridY + viewH + 12) return;   // cull off-view rows
       const have = !!(p.cards || {})[t];
       this.drawCard(cx, cy, cardW, cardH, t, { hidden: !have, sel: i === this.ui.sel, count: have ? p.cards[t] : 0 });
     });
+    ctx.restore();
+    // scrollbar (only when the grid overflows its viewport)
+    if (maxScroll > 0) {
+      const tx0 = x + w - 18, th = viewH, thumbH = Math.max(26, th * viewH / totalH);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.beginPath(); ctx.roundRect(tx0, gridY, 5, th, 2.5); ctx.fill();
+      ctx.fillStyle = "rgba(255,233,160,0.55)";
+      ctx.beginPath(); ctx.roundRect(tx0, gridY + (th - thumbH) * (scroll / maxScroll), 5, thumbH, 2.5); ctx.fill();
+    }
 
-    // detail panel for the highlighted monster (compact, sits under the grid)
+    // detail panel for the highlighted monster
     const sel = CARD_MONSTERS[this.ui.sel], have = !!(p.cards || {})[sel];
-    const gridBottom = gridY + rows * cardH + (rows - 1) * rowGap;
-    const dy = gridBottom + 18, dh = y + h - 50 - dy, dx = x + 28, dw = w - 56;
     ctx.fillStyle = "rgba(0,0,0,0.25)";
     ctx.beginPath(); ctx.roundRect(dx, dy, dw, dh, 8); ctx.fill();
     if (!have) {
@@ -694,7 +716,7 @@ Object.assign(Game.prototype, {
       this.text("Cards owned: " + count, dx + 24, dy + dh - 16, { size: 14, color: "#9cf0a0" });
       this.text(hint, dx + dw - 24, dy + dh - 16, { size: 14, align: "right", color: count >= 5 ? "#9cf0a0" : "#c8b46a" });
     }
-    this.text("← →  select        ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+    this.text("← → ↑ ↓  select        ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
   /* procedurally-drawn achievement badge icons (no sprite assets). Centered on

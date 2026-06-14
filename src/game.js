@@ -259,9 +259,11 @@ class Game {
         else this.flash = { text: pick + " — not implemented yet", t: 1400 };
       }
     } else if (ui.screen === "bestiary") {
-      const n = CARD_MONSTERS.length;
+      const n = CARD_MONSTERS.length, cols = ui.cols || 5;   // cols set by the renderer to match its grid
       if (key === "arrowleft" || key === "a") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
       else if (key === "arrowright" || key === "d") { ui.sel = (ui.sel + 1) % n; this.audio.play("move"); }
+      else if (key === "arrowup" || key === "w") { ui.sel = (ui.sel + n - cols) % n; this.audio.play("move"); }
+      else if (key === "arrowdown" || key === "s") { ui.sel = (ui.sel + cols) % n; this.audio.play("move"); }
     } else if (ui.screen === "achievements") {
       const n = ACHIEVEMENTS.length, cols = ui.cols || 4;   // cols set by the renderer to match its grid
       if (key === "arrowleft" || key === "a") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
