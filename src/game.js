@@ -59,6 +59,7 @@ class Game {
       koro_skill: buildKoroInterior({ shop: "skill", returnEntry: "from_skill" }),
       koro_inn:   buildKoroInterior({ inn: true, returnEntry: "from_inn" }),
       koro_cards: buildKoroInterior({ cards: true, returnEntry: "from_cards" }),
+      arena:      buildKoroInterior({ arena: true, returnEntry: "from_arena", returnTo: "worldmap" }),
       worldmap:   buildWorldMap(),
       xalkorr:    buildXalkorr(),
     };
@@ -121,6 +122,10 @@ class Game {
     // --- quest log: ordered list of { id, done }; first quest is live from the start ---
     this.quests = [{ id: "reach_koro", done: false }];
     this.notifs = [];           // stacked toast notifications (quest updates, etc.)
+
+    // --- achievements: a per-playthrough trophy case ({ [id]: unlockTime }),
+    //     reset on New Game and carried in each save (see save/loadGame) ---
+    this.ach = {};
 
     // --- difficulty (set on New Game; casual|normal|hard|hardcore) ---
     this.difficulty = "normal";
@@ -244,6 +249,7 @@ class Game {
         else if (pick === "Skills") this.ui = { screen: "skills", sel: 0, drag: null, hover: -1, target: "hero" };
         else if (pick === "Equip") this.ui = { screen: "equip", sel: 0, drag: null, hover: null, target: "hero" };
         else if (pick === "Bestiary") this.ui = { screen: "bestiary", sel: 0 };
+        else if (pick === "Achievements") this.ui = { screen: "achievements", sel: 0 };
         else if (pick === "Quests") this.ui = { screen: "quests", sel: 0 };
         else if (pick === "Save") {
           if (this.difficulty === "hardcore") this.flash = { text: "Hardcore — saving is disabled.", t: 1600 };
@@ -256,6 +262,12 @@ class Game {
       const n = CARD_MONSTERS.length;
       if (key === "arrowleft" || key === "a") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
       else if (key === "arrowright" || key === "d") { ui.sel = (ui.sel + 1) % n; this.audio.play("move"); }
+    } else if (ui.screen === "achievements") {
+      const n = ACHIEVEMENTS.length, cols = ui.cols || 4;   // cols set by the renderer to match its grid
+      if (key === "arrowleft" || key === "a") { ui.sel = (ui.sel + n - 1) % n; this.audio.play("move"); }
+      else if (key === "arrowright" || key === "d") { ui.sel = (ui.sel + 1) % n; this.audio.play("move"); }
+      else if (key === "arrowup" || key === "w") { ui.sel = (ui.sel + n - cols) % n; this.audio.play("move"); }
+      else if (key === "arrowdown" || key === "s") { ui.sel = (ui.sel + cols) % n; this.audio.play("move"); }
     }
   }
 
@@ -267,6 +279,7 @@ class Game {
       const cx = chest.tx * TILE + TILE / 2, cy = (chest.ty + 0.5) * TILE;
       if (Math.hypot(p.x - cx, p.y - cy) > TILE * 1.7) continue;
       chest.opened = true;
+      if (this.stats) this.stats.chests = (this.stats.chests || 0) + 1;
       this.audio.play("chest");
       if (chest.gold) {                                // a pouch of coin
         p.gold += chest.gold;
@@ -337,6 +350,8 @@ class Game {
             ["Wait. The door...", "I didn't send for anyone else."],
           ], onClose: () => this.startMercScene(n) };
         }
+      } else if (n.arena) {
+        this.openArena(n);
       } else if (n.gateGuard) {
         this.dialogue = { name: n.name, page: 0, portrait: n.portrait, lines: [
           ["Hold. The north road's closed.", "Koro's got trouble within its own walls—", "no one leaves for Xal'Korr until it's settled."],
@@ -350,6 +365,32 @@ class Game {
   }
 
   hasAlly(n) { return this.player.party.some(m => m.id === "ally"); }
+
+  /* ------------------------------- arena -------------------------------- */
+  /* the Arena Master: a bit of patter, then a yes/no to enter the next bout.
+   * Progress (cleared rungs) lives in stats.arenaWins so it saves with the run. */
+  openArena(n) {
+    const wins = this.stats.arenaWins || 0, total = ARENA_FOES.length;
+    const champ = wins >= total;
+    const idx = Math.min(wins, total - 1);            // after a full clear, the last foe replays
+    const foeName = ENEMY_TYPES[ARENA_FOES[idx]].name;
+    const intro = champ
+      ? ["You've felled every challenger I keep.", "But the pit always thirsts for more —", "care for a rematch with the " + foeName + "?"]
+      : wins === 0
+        ? ["So you fancy yourself a fighter?", "Down here, names mean nothing —", "only who's left standing.", "First blood: the " + foeName + "."]
+        : ["Back for more, are you?", "Challenger " + (idx + 1) + " of " + total + ":", "the " + foeName + " awaits your blade."];
+    this.dialogue = {
+      name: n.name, page: 0, portrait: n.portrait, lines: [intro],
+      onClose: () => {
+        this.prompt = { sel: 0, text: "Enter the pit against the " + foeName + "?",
+          onYes: () => this.startArenaFight(idx), onNo: () => {} };
+      },
+    };
+  }
+  startArenaFight(idx) {
+    this.dialogue = this.prompt = null;
+    this.enterBattle({ type: ARENA_FOES[idx], alive: true, arena: true, arenaIdx: idx });
+  }
 
   /* ------------------------------- inn rest ------------------------------ */
   /* the innkeeper's offer: 250 gold for a night's sleep that heals to full */
@@ -427,6 +468,25 @@ class Game {
     this.notifs.push({ text, color: color || "#ffe9b0", t: 2600, max: 2600 });
     if (this.notifs.length > 4) this.notifs.shift();   // cap the stack
   }
+  /* ----------------------------- achievements ---------------------------- *
+   * Per-playthrough: `this.ach` is reset on New Game and stored in the save
+   * file (see saveGame/loadGame), so each run keeps its own trophy case. */
+  unlockAch(id) {
+    if (this.ach[id]) return;                          // already earned this run
+    const a = ACHIEVEMENTS.find(x => x.id === id);
+    if (!a) return;
+    this.ach[id] = Date.now();
+    this.pushNotif("★  Achievement:  " + a.name, "#ffe9a0");
+  }
+  /* re-evaluate every achievement against live state; unlock newly-earned ones.
+   * Idempotent and cheap, so it's safe to call each tick. */
+  checkAchievements() {
+    if (!this.player || !this.stats) return;
+    for (const a of ACHIEVEMENTS) {
+      if (!this.ach[a.id] && a.test(this)) this.unlockAch(a.id);
+    }
+  }
+
   /* add a new quest (active) unless it's already in the log */
   addQuest(id) {
     if (!QUESTS[id] || this.hasQuest(id)) return;
@@ -623,6 +683,7 @@ class Game {
   rollCards(pack) {
     const pool = [];
     for (const t of CARD_MONSTERS) {
+      if (CARD_INFO[t].arena) continue;               // arena foes are earned in the pit, not sold in packs
       const w = pack.weights[CARD_INFO[t].rarity] || 1;
       for (let i = 0; i < w; i++) pool.push(t);
     }
@@ -669,7 +730,8 @@ class Game {
   beginTransition(to) { this.exiting = true; this.exitTo = to; }
 
   resetRunStats() {
-    this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null };
+    this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null, byType: {}, chests: 0, visited: {}, arenaWins: 0 };
+    this.ach = {};               // fresh run -> empty trophy case
     this.runId = "r_" + Date.now() + "_" + Math.floor(Math.random() * 1e6).toString(36);
   }
 
@@ -766,6 +828,7 @@ class Game {
       gold: p.gold, skills: p.skills.slice(), boughtSkills: p.boughtSkills.slice(),
       party: p.party.map(m => ({ ...m })),
       cards: { ...(p.cards || {}) },
+      ach: { ...this.ach },                            // this run's earned achievements
       equipOwned: p.equipOwned.slice(), equip: { ...p.equip },
       chestsOpened: Object.fromEntries(Object.keys(this.areas)
         .filter(id => this.areas[id].chests)
@@ -832,8 +895,9 @@ class Game {
     this.cutscene = null;
     if (data.difficulty) this.difficulty = data.difficulty;
     this.difficultySel = { casual: 0, normal: 1, hard: 2, hardcore: 3 }[this.difficulty] ?? 1;
-    if (data.stats) this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null, ...data.stats, skillUses: { ...(data.stats.skillUses || {}) } };
+    if (data.stats) this.stats = { kills: 0, dmgDealt: 0, skillUses: {}, lastKiller: null, byType: {}, chests: 0, visited: {}, arenaWins: 0, ...data.stats, skillUses: { ...(data.stats.skillUses || {}) }, byType: { ...(data.stats.byType || {}) }, visited: { ...(data.stats.visited || {}) } };
     else this.resetRunStats();
+    this.ach = { ...(data.ach || {}) };               // this run's earned achievements
     this.runId = data.runId || ("r_load_" + Date.now());
     this.area = this.areas[data.area] ? data.area : "forest";
     this.world = this.areas[this.area];
@@ -880,6 +944,8 @@ class Game {
       for (const nft of this.notifs) nft.t -= dt;
       this.notifs = this.notifs.filter(nft => nft.t > 0);
     }
+
+    this.checkAchievements();   // unlock any newly-earned trophies (idempotent)
 
     // area-to-area transition: fade to black, swap rooms, fade back in
     if (this.transition) {
@@ -1042,6 +1108,7 @@ class Game {
     this.encounter = null; this.dialogue = null; this.shop = null; this.cardshop = null; this.encounterCD = 1200; this.bossTalkCD = 0;
     this.portalCD = 600;     // brief grace so we don't instantly re-trigger the door we arrived on
     this.updateQuestsForArea(id);
+    if (this.stats) { (this.stats.visited || (this.stats.visited = {}))[id] = true; this.checkAchievements(); }
     if (this.player.party.length) this.seedTrail();
     if (autosave && this.difficulty !== "hardcore") { this.saveGame(true); this.autosaveAnim = { t: 2000 }; }
   }

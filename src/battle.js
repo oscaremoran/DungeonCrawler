@@ -174,6 +174,9 @@ Object.assign(Game.prototype, {
     const b = this.battle;
     b.phase = "enemy_die"; b.timer = 1300; b.enemy.dead = true; b.enemy.deathT = 0;
     this.stats.kills++;
+    const bt = (this.stats.byType || (this.stats.byType = {}));   // per-type tally (powers some achievements)
+    const et = b.target && b.target.type;
+    if (et) bt[et] = (bt[et] || 0) + 1;
     this.battleMsg("The " + b.enemy.name + " collapses!");
   },
   afterHeroAction() {
@@ -226,6 +229,26 @@ Object.assign(Game.prototype, {
     this.battle = null; this.encounterCD = 1700;
     if (result === "lose") {                          // -> You Died screen with run stats
       this.beginGameOver();
+      return;
+    }
+    if (result === "win" && tgt && tgt.arena) {       // arena bout: bank progress + a purse, no overworld changes
+      const total = ARENA_FOES.length, cleared = this.stats.arenaWins || 0;
+      if (tgt.arenaIdx === cleared && cleared < total) this.stats.arenaWins = cleared + 1;  // advanced a rung
+      const purse = 80 + tgt.arenaIdx * 40;
+      this.player.gold += purse;
+      // earn the slain foe's Bestiary card (arena cards aren't sold in packs)
+      const p = this.player; if (!p.cards) p.cards = {};
+      const newCard = !p.cards[tgt.type];
+      p.cards[tgt.type] = (p.cards[tgt.type] || 0) + 1;
+      const champ = (this.stats.arenaWins || 0) >= total;
+      this.state = "overworld"; this.exiting = false; this.exitTo = null; this.fade = 1;
+      const last = newCard ? "A card for the " + ENEMY_TYPES[tgt.type].name + " joins your bestiary!"
+                           : "Come back when you're ready for more.";
+      this.dialogue = { name: "ARENA MASTER", page: 0, portrait: "npc_keeper", lines: [
+        champ
+          ? ["The crowd is on its feet!", "You've bested every fighter I keep.", "Champion of the Pit — purse: +" + purse + " gold.", last]
+          : ["A clean kill — the crowd roars!", "Purse: +" + purse + " gold.", last],
+      ]};
       return;
     }
     if (result === "win" && tgt) {

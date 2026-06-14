@@ -289,7 +289,7 @@ Object.assign(Game.prototype, {
         if (o.kind !== "pond" && o.kind !== "flowers_red" && o.kind !== "flowers_orange")
           shadow(worldX, baseY, k.widthTiles * 0.8);
         this.drawSprite(art[o.kind], worldX, baseY, k.widthTiles, false);
-        if (o.kind === "house_purple") {              // the Collector's house: a skull crest
+        if (o.kind === "house_purple" && !o.noCrest) {  // the Collector's house: a skull crest
           const img = art[o.kind], h = k.widthTiles * TILE * (img.height / img.width);
           this.drawSkull(worldX - this.cam.x, baseY - h * 0.62 - this.cam.y, TILE * 0.42);
         }
@@ -597,6 +597,7 @@ Object.assign(Game.prototype, {
     else if (ui.screen === "equip") this.drawEquipScreen();
     else if (ui.screen === "quests") this.drawQuestsScreen();
     else if (ui.screen === "bestiary") this.drawBestiaryScreen();
+    else if (ui.screen === "achievements") this.drawAchievementsScreen();
   },
 
   /* a single monster card: rarity-tinted frame, battle-sprite portrait, name.
@@ -668,8 +669,10 @@ Object.assign(Game.prototype, {
     ctx.fillStyle = "rgba(0,0,0,0.25)";
     ctx.beginPath(); ctx.roundRect(dx, dy, dw, dh, 8); ctx.fill();
     if (!have) {
-      this.text("No card yet. Buy packs at the Collector's house in Koro.",
-        dx + dw / 2, dy + dh / 2, { size: 17, align: "center", color: "#9aa3c4" });
+      const hint = CARD_INFO[sel].arena
+        ? "No card yet. Defeat this fighter in the Combat Arena to earn it."
+        : "No card yet. Buy packs at the Collector's house in Koro.";
+      this.text(hint, dx + dw / 2, dy + dh / 2, { size: 17, align: "center", color: "#9aa3c4" });
     } else {
       // progressive study: 1 card = name/desc/rarity, 3 = +HP, 5 = +full stats
       const cfg = ENEMY_TYPES[sel], info = CARD_INFO[sel], count = p.cards[sel];
@@ -692,6 +695,229 @@ Object.assign(Game.prototype, {
       this.text(hint, dx + dw - 24, dy + dh - 16, { size: 14, align: "right", color: count >= 5 ? "#9cf0a0" : "#c8b46a" });
     }
     this.text("← →  select        ESC  back", W / 2, H - 32, { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
+  },
+
+  /* procedurally-drawn achievement badge icons (no sprite assets). Centered on
+   * (cx,cy); s is roughly the icon half-size; col is the fill (gold when earned).
+   * fill(lw): fill the current path in col + a dark outline (lw=0 skips outline);
+   * line(lw): stroke the current path in col. */
+  drawBadgeIcon(key, cx, cy, s, col) {
+    const ctx = this.ctx, dark = "rgba(40,28,10,0.55)";
+    ctx.save();
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    const fill = (lw) => { ctx.fillStyle = col; ctx.fill(); if (lw !== 0) { ctx.strokeStyle = dark; ctx.lineWidth = lw || Math.max(1, s * 0.14); ctx.stroke(); } };
+    const line = (lw) => { ctx.strokeStyle = col; ctx.lineWidth = lw || Math.max(1.5, s * 0.18); ctx.stroke(); };
+    switch (key) {
+      case "sword":
+        ctx.beginPath();                                // upright blade
+        ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s * 0.18, cy - s * 0.7);
+        ctx.lineTo(cx + s * 0.18, cy + s * 0.35); ctx.lineTo(cx - s * 0.18, cy + s * 0.35);
+        ctx.lineTo(cx - s * 0.18, cy - s * 0.7); ctx.closePath(); fill();
+        ctx.beginPath(); ctx.moveTo(cx - s * 0.6, cy + s * 0.4); ctx.lineTo(cx + s * 0.6, cy + s * 0.4); line(Math.max(2, s * 0.22));
+        ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.4); ctx.lineTo(cx, cy + s * 0.85); line(Math.max(2, s * 0.22));
+        ctx.beginPath(); ctx.arc(cx, cy + s * 0.95, s * 0.15, 0, 7); fill(0);
+        break;
+      case "dagger":
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - s * 0.92); ctx.lineTo(cx + s * 0.16, cy - s * 0.45);
+        ctx.lineTo(cx + s * 0.16, cy + s * 0.12); ctx.lineTo(cx - s * 0.16, cy + s * 0.12);
+        ctx.lineTo(cx - s * 0.16, cy - s * 0.45); ctx.closePath(); fill();
+        ctx.beginPath(); ctx.moveTo(cx - s * 0.45, cy + s * 0.2); ctx.lineTo(cx + s * 0.45, cy + s * 0.2); line(Math.max(2, s * 0.2));
+        ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.2); ctx.lineTo(cx, cy + s * 0.85); line(Math.max(2, s * 0.22));
+        break;
+      case "skull":
+        ctx.beginPath();
+        ctx.arc(cx, cy - s * 0.15, s * 0.72, Math.PI * 0.85, Math.PI * 0.15, false);
+        ctx.lineTo(cx + s * 0.5, cy + s * 0.55); ctx.lineTo(cx + s * 0.28, cy + s * 0.82);
+        ctx.lineTo(cx - s * 0.28, cy + s * 0.82); ctx.lineTo(cx - s * 0.5, cy + s * 0.55);
+        ctx.closePath(); fill();
+        ctx.fillStyle = dark;
+        ctx.beginPath(); ctx.arc(cx - s * 0.28, cy - s * 0.05, s * 0.17, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx + s * 0.28, cy - s * 0.05, s * 0.17, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.12); ctx.lineTo(cx - s * 0.1, cy + s * 0.4); ctx.lineTo(cx + s * 0.1, cy + s * 0.4); ctx.closePath(); ctx.fill();
+        break;
+      case "shield":
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - s * 0.88); ctx.lineTo(cx + s * 0.7, cy - s * 0.55);
+        ctx.lineTo(cx + s * 0.7, cy + s * 0.1);
+        ctx.quadraticCurveTo(cx + s * 0.58, cy + s * 0.7, cx, cy + s * 0.95);
+        ctx.quadraticCurveTo(cx - s * 0.58, cy + s * 0.7, cx - s * 0.7, cy + s * 0.1);
+        ctx.lineTo(cx - s * 0.7, cy - s * 0.55); ctx.closePath(); fill();
+        ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1.5, s * 0.16);
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.5); ctx.lineTo(cx, cy + s * 0.6);
+        ctx.moveTo(cx - s * 0.42, cy); ctx.lineTo(cx + s * 0.42, cy); ctx.stroke();
+        break;
+      case "axe":
+        ctx.beginPath(); ctx.moveTo(cx - s * 0.5, cy + s * 0.85); ctx.lineTo(cx + s * 0.32, cy - s * 0.85); line(Math.max(2, s * 0.2));
+        ctx.beginPath();                                // single curved blade
+        ctx.moveTo(cx + s * 0.18, cy - s * 0.78);
+        ctx.quadraticCurveTo(cx + s * 1.0, cy - s * 0.5, cx + s * 0.82, cy + s * 0.22);
+        ctx.lineTo(cx + s * 0.22, cy - s * 0.28); ctx.closePath(); fill();
+        break;
+      case "bone": {
+        ctx.beginPath(); ctx.moveTo(cx - s * 0.45, cy + s * 0.45); ctx.lineTo(cx + s * 0.45, cy - s * 0.45); line(Math.max(2.4, s * 0.3));
+        const knob = (kx, ky) => {
+          ctx.beginPath(); ctx.arc(kx - s * 0.13, ky - s * 0.13, s * 0.2, 0, 7); ctx.arc(kx + s * 0.13, ky + s * 0.13, s * 0.2, 0, 7);
+          ctx.fillStyle = col; ctx.fill();
+        };
+        knob(cx - s * 0.45, cy + s * 0.45); knob(cx + s * 0.45, cy - s * 0.45);
+        break;
+      }
+      case "star":
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const ang = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 === 0 ? s : s * 0.45;
+          const px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
+          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath(); fill();
+        break;
+      case "allies": {
+        const fig = (fx) => {
+          ctx.beginPath(); ctx.arc(fx, cy - s * 0.32, s * 0.3, 0, 7); fill(0);
+          ctx.beginPath(); ctx.moveTo(fx - s * 0.42, cy + s * 0.72);
+          ctx.quadraticCurveTo(fx, cy - s * 0.12, fx + s * 0.42, cy + s * 0.72); ctx.closePath(); fill(0);
+        };
+        fig(cx - s * 0.38); fig(cx + s * 0.38);
+        break;
+      }
+      case "spark": {
+        const spk = (scx, scy, ss) => {
+          ctx.beginPath(); ctx.moveTo(scx, scy - ss);
+          ctx.quadraticCurveTo(scx + ss * 0.2, scy - ss * 0.2, scx + ss, scy);
+          ctx.quadraticCurveTo(scx + ss * 0.2, scy + ss * 0.2, scx, scy + ss);
+          ctx.quadraticCurveTo(scx - ss * 0.2, scy + ss * 0.2, scx - ss, scy);
+          ctx.quadraticCurveTo(scx - ss * 0.2, scy - ss * 0.2, scx, scy - ss);
+          ctx.closePath(); fill(0);
+        };
+        spk(cx - s * 0.12, cy - s * 0.08, s * 0.82); spk(cx + s * 0.55, cy + s * 0.52, s * 0.34);
+        break;
+      }
+      case "armor":
+        ctx.beginPath();
+        ctx.moveTo(cx - s * 0.7, cy - s * 0.6); ctx.lineTo(cx - s * 0.25, cy - s * 0.6);
+        ctx.lineTo(cx, cy - s * 0.35); ctx.lineTo(cx + s * 0.25, cy - s * 0.6); ctx.lineTo(cx + s * 0.7, cy - s * 0.6);
+        ctx.lineTo(cx + s * 0.55, cy + s * 0.5);
+        ctx.quadraticCurveTo(cx, cy + s * 0.95, cx - s * 0.55, cy + s * 0.5); ctx.closePath(); fill();
+        ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, s * 0.1);
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.3); ctx.lineTo(cx, cy + s * 0.6); ctx.stroke();
+        break;
+      case "chest":
+        ctx.beginPath();                                // lid
+        ctx.moveTo(cx - s * 0.78, cy - s * 0.12); ctx.lineTo(cx - s * 0.6, cy - s * 0.55);
+        ctx.lineTo(cx + s * 0.6, cy - s * 0.55); ctx.lineTo(cx + s * 0.78, cy - s * 0.12); ctx.closePath(); fill();
+        ctx.beginPath(); ctx.rect(cx - s * 0.78, cy - s * 0.12, s * 1.56, s * 0.82); fill();
+        ctx.fillStyle = dark; ctx.beginPath(); ctx.rect(cx - s * 0.12, cy - s * 0.18, s * 0.24, s * 0.34); ctx.fill();
+        break;
+      case "coin":
+        ctx.beginPath(); ctx.arc(cx, cy, s * 0.85, 0, 7); fill();
+        ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, s * 0.1);
+        ctx.beginPath(); ctx.arc(cx, cy, s * 0.6, 0, 7); ctx.stroke();
+        ctx.fillStyle = dark;
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.36); ctx.lineTo(cx + s * 0.24, cy);
+        ctx.lineTo(cx, cy + s * 0.36); ctx.lineTo(cx - s * 0.24, cy); ctx.closePath(); ctx.fill();
+        break;
+      case "card":
+        ctx.beginPath(); ctx.roundRect(cx - s * 0.55, cy - s * 0.8, s * 1.1, s * 1.6, s * 0.14); fill();
+        ctx.fillStyle = dark;
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.38); ctx.lineTo(cx + s * 0.26, cy);
+        ctx.lineTo(cx, cy + s * 0.38); ctx.lineTo(cx - s * 0.26, cy); ctx.closePath(); ctx.fill();
+        break;
+      case "book":
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - s * 0.55);
+        ctx.quadraticCurveTo(cx - s * 0.4, cy - s * 0.78, cx - s * 0.85, cy - s * 0.5);
+        ctx.lineTo(cx - s * 0.85, cy + s * 0.55);
+        ctx.quadraticCurveTo(cx - s * 0.4, cy + s * 0.35, cx, cy + s * 0.55);
+        ctx.quadraticCurveTo(cx + s * 0.4, cy + s * 0.35, cx + s * 0.85, cy + s * 0.55);
+        ctx.lineTo(cx + s * 0.85, cy - s * 0.5);
+        ctx.quadraticCurveTo(cx + s * 0.4, cy - s * 0.78, cx, cy - s * 0.55); ctx.closePath(); fill();
+        ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, s * 0.12);
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.55); ctx.lineTo(cx, cy + s * 0.55); ctx.stroke();
+        break;
+      case "house":
+        ctx.beginPath();                                // roof
+        ctx.moveTo(cx, cy - s * 0.85); ctx.lineTo(cx + s * 0.82, cy - s * 0.08); ctx.lineTo(cx - s * 0.82, cy - s * 0.08); ctx.closePath(); fill();
+        ctx.beginPath(); ctx.rect(cx - s * 0.6, cy - s * 0.08, s * 1.2, s * 0.82); fill();
+        ctx.fillStyle = dark; ctx.beginPath(); ctx.rect(cx - s * 0.18, cy + s * 0.2, s * 0.36, s * 0.54); ctx.fill();
+        break;
+      case "castle": {
+        const top = cy - s * 0.5, bot = cy + s * 0.82;
+        ctx.beginPath();                                // crenellated wall in one path
+        ctx.moveTo(cx - s * 0.85, bot); ctx.lineTo(cx - s * 0.85, top - s * 0.25);
+        ctx.lineTo(cx - s * 0.45, top - s * 0.25); ctx.lineTo(cx - s * 0.45, top);
+        ctx.lineTo(cx - s * 0.18, top); ctx.lineTo(cx - s * 0.18, top - s * 0.25);
+        ctx.lineTo(cx + s * 0.18, top - s * 0.25); ctx.lineTo(cx + s * 0.18, top);
+        ctx.lineTo(cx + s * 0.45, top); ctx.lineTo(cx + s * 0.45, top - s * 0.25);
+        ctx.lineTo(cx + s * 0.85, top - s * 0.25); ctx.lineTo(cx + s * 0.85, bot); ctx.closePath(); fill();
+        ctx.fillStyle = dark;                           // arched gate
+        ctx.beginPath(); ctx.moveTo(cx - s * 0.22, bot); ctx.lineTo(cx - s * 0.22, cy + s * 0.2);
+        ctx.arc(cx, cy + s * 0.2, s * 0.22, Math.PI, 0); ctx.lineTo(cx + s * 0.22, bot); ctx.closePath(); ctx.fill();
+        break;
+      }
+    }
+    ctx.restore();
+  },
+
+  /* ----------------------------- achievements --------------------------- */
+  drawAchievementsScreen() {
+    const W = this.cv.width, H = this.cv.height, ctx = this.ctx, p = this.player;
+    const x = 40, y = 36, w = W - 80, h = H - 110;
+    this.drawWindow(x, y, w, h);
+    this.text("ACHIEVEMENTS", x + 28, y + 44, { size: 24, bold: true, color: "#ffe9a0" });
+    const earned = ACHIEVEMENTS.filter(a => this.ach[a.id]).length;
+    this.text(earned + " / " + ACHIEVEMENTS.length + " EARNED",
+      x + w - 28, y + 44, { size: 16, align: "right", color: "#ffd479" });
+
+    // badge grid (4 columns); the selected tile's detail fills the panel below
+    const n = ACHIEVEMENTS.length, cols = 4, pad = 14, gridX = x + 28, gridY = y + 72;
+    this.ui.cols = cols;                               // keep keyboard nav in sync
+    const rows = Math.ceil(n / cols);
+    const tileW = (w - 56 - (cols - 1) * pad) / cols;
+    const tileH = 66;
+    ACHIEVEMENTS.forEach((a, i) => {
+      const col = i % cols, row = (i / cols) | 0;
+      const tx = gridX + col * (tileW + pad), ty = gridY + row * (tileH + pad);
+      const have = !!this.ach[a.id], sel = i === this.ui.sel;
+      // tile body
+      const g = ctx.createLinearGradient(0, ty, 0, ty + tileH);
+      g.addColorStop(0, have ? "#2c3252" : "#1c1c30");
+      g.addColorStop(1, have ? "#1a1f38" : "#141426");
+      ctx.fillStyle = g;
+      ctx.strokeStyle = sel ? "#ffe9a0" : (have ? "#ffd479" : "rgba(120,128,165,0.45)");
+      ctx.lineWidth = sel ? 3 : 1.6;
+      ctx.beginPath(); ctx.roundRect(tx, ty, tileW, tileH, 9); ctx.fill(); ctx.stroke();
+      // badge medallion (left): earned -> icon on a gold disc; locked -> padlock
+      const bcx = tx + 32, bcy = ty + tileH / 2;
+      ctx.beginPath(); ctx.arc(bcx, bcy, 21, 0, 7);
+      ctx.fillStyle = have ? "rgba(255,212,121,0.16)" : "rgba(0,0,0,0.30)"; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = have ? "#ffd479" : "rgba(120,128,165,0.5)"; ctx.stroke();
+      if (have) this.drawBadgeIcon(a.icon, bcx, bcy, 13, "#ffe1a0");
+      else this.drawLock(bcx, bcy + 2, 11, "rgba(150,158,196,0.75)");
+      // name (right of the badge); locked names are dimmed
+      this.text(have ? a.name : "? ? ? ? ?", tx + 60, bcy + 5,
+        { size: 16, bold: true, color: have ? "#fff3c8" : "#7d83a6" });
+    });
+
+    // detail panel under the grid
+    const sel = ACHIEVEMENTS[this.ui.sel], have = !!this.ach[sel.id];
+    const dy = gridY + rows * (tileH + pad) + 6, dh = y + h - 50 - dy, dx = x + 28, dw = w - 56;
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath(); ctx.roundRect(dx, dy, dw, dh, 8); ctx.fill();
+    const mcx = dx + 40, mcy = dy + dh / 2;
+    ctx.beginPath(); ctx.arc(mcx, mcy, 24, 0, 7);
+    ctx.fillStyle = have ? "rgba(255,212,121,0.16)" : "rgba(0,0,0,0.30)"; ctx.fill();
+    ctx.lineWidth = 2.2; ctx.strokeStyle = have ? "#ffd479" : "rgba(120,128,165,0.5)"; ctx.stroke();
+    if (have) this.drawBadgeIcon(sel.icon, mcx, mcy, 16, "#ffe1a0");
+    else this.drawLock(mcx, mcy + 2, 13, "rgba(150,158,196,0.75)");
+    this.text(have ? sel.name : "LOCKED", dx + 80, dy + dh / 2 - 6,
+      { size: 20, bold: true, color: have ? "#fff3c8" : "#9aa3c4" });
+    this.text(sel.desc, dx + 80, dy + dh / 2 + 20, { size: 15, color: have ? "#cfd6ff" : "#8890b0" });
+    if (have) this.text("EARNED", dx + dw - 20, dy + dh / 2 + 5,
+      { size: 14, bold: true, align: "right", color: "#9cf0a0" });
+
+    this.text("← → ↑ ↓  select        ESC  back", W / 2, H - 32,
+      { align: "center", size: 15, color: "rgba(230,235,255,0.7)" });
   },
 
   /* the Monster Cards purchase screen (purple house). Lists packs; a pack-opening
@@ -1188,9 +1414,11 @@ Object.assign(Game.prototype, {
     const pImg = (d.portrait && this.art[d.portrait]) || this.art.portrait;
     if (showPortrait) this.drawPortrait(bx + 18, by + 18, ph, d.portrait);
     const tx = showPortrait ? bx + 18 + ph * (pImg.width / pImg.height) + 26 : bx + 28;
-    // name plate
+    // name plate — sized to the speaker's name (so longer names don't overflow)
     if (d.name) {
-      this.drawWindow(bx + 16, by - 22, 150, 38);
+      ctx.font = "bold 18px Georgia, serif";
+      const plateW = Math.max(150, ctx.measureText(d.name).width + 40);
+      this.drawWindow(bx + 16, by - 22, plateW, 38);
       this.text(d.name, bx + 36, by + 3, { size: 18, bold: true, color: "#ffe9a0" });
     }
     lines.forEach((ln, i) => this.text(ln, tx, by + 44 + i * 32, { size: 20, color: "#eef1ff" }));

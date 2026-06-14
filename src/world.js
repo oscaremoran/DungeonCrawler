@@ -354,6 +354,20 @@ function buildWorldMap() {
     { tx: MAP_W - 7,  ty: 7,          item: "chain_mail",   hide: true },
     { tx: 7,          ty: MAP_H - 8,  gold: 250,            hide: true },
   ]);
+
+  // a Combat Arena off the eastern side of the road (reuses the purple house art).
+  // Door tile = (atx+1, aty+2); the hero returns to the tile just below it.
+  const atx = 33, aty = 20;
+  placeObj(r, "house_purple", atx, aty);
+  r.objects[r.objects.length - 1].noCrest = true;     // arena, not the Collector's house — no skull crest
+  const adx = atx + 1, ady = aty + 2;
+  for (const o of r.objects) if (o.tx === adx && o.ty === ady && o.kind !== "house_purple") o._gone = true;
+  r.objects = r.objects.filter(o => !o._gone);
+  blocked[ady][adx] = false;                          // keep the doorstep walkable
+  r.portals.push({ tx: adx, ty: ady, to: "arena", entry: "in" });
+  r.entries.from_arena = { tx: adx, ty: ady + 1 };
+  placeObj(r, "sign", adx + 2, ady);
+  r.signs.push({ tx: adx + 2, ty: ady, text: ["Combat Arena", "Test your steel within."] });
   return r;
 }
 
@@ -485,7 +499,7 @@ function buildKoroInterior(opt) {
   // doorway out, bottom-centre
   ground[iy1][cx] = floor; blocked[iy1][cx] = false;
   r.objects = r.objects.filter(o => !(o.kind === "cliff" && o.tx === cx && o.ty === iy1));
-  r.portals.push({ tx: cx, ty: iy1, to: "koro", entry: opt.returnEntry });
+  r.portals.push({ tx: cx, ty: iy1, to: opt.returnTo || "koro", entry: opt.returnEntry });
   r.entries = { in: { tx: cx, ty: iy1 - 2 } };
 
   if (opt.shop) {
@@ -502,6 +516,13 @@ function buildKoroInterior(opt) {
     placeObj(r, "crate", cx + 4, iy0 + 3);
     r.npcs.push({ tx: cx, ty: iy0 + 3, name: "FENWICK", cards: true, sprite: "npc_keeper", portrait: "npc_keeper" });
     blocked[iy0 + 3][cx] = true;
+  }
+
+  if (opt.arena) {
+    // the Arena Master presides at the head of a crate-ringed fighting pit
+    r.npcs.push({ tx: cx, ty: iy0 + 3, name: "ARENA MASTER", arena: true, sprite: "npc_keeper", portrait: "npc_keeper" });
+    blocked[iy0 + 3][cx] = true;
+    for (const dx of [-4, 4]) { placeObj(r, "crate", cx + dx, iy0 + 3); placeObj(r, "crate", cx + dx, iy1 - 3); }
   }
 
   if (inn) {

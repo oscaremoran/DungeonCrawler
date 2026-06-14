@@ -14,6 +14,7 @@ class GameAudio {
     this.sfxGain = null;
     this.muted = false;
     this._track = null;       // current music track name
+    this._trackDefs = null;   // cached track-definition table (built once)
     this._step = 0;
     this._nextTime = 0;
     this._timer = null;
@@ -148,7 +149,11 @@ class GameAudio {
   // length of `lead`; `chords` entries are midi arrays (held a few steps) and
   // `drums` is a string per step using k(ick) s(nare) h(at) — '.' is a rest.
   _tracks() {
-    return {
+    // Track definitions are static data — build once and cache. (Rebuilding this
+    // object every 25ms scheduler tick churned the GC and was a source of the
+    // main-thread stalls that desynced the music during heavy fights.)
+    if (this._trackDefs) return this._trackDefs;
+    return (this._trackDefs = {
       // foreboding main-theme: slow, dark Am–F–Dm–E with a sparse low melody,
       // sustained pads and an ominous heartbeat kick
       title: {
@@ -246,7 +251,7 @@ class GameAudio {
         drums: "k.s.k.shk.s.k.ss",
         drumVol: 0.85,
       },
-    };
+    });
   }
 
   playMusic(name) {
@@ -272,7 +277,7 @@ class GameAudio {
     // past our lookahead, resync to "now" — otherwise we'd schedule notes in the
     // past, which the audio engine drops/bunches up: that was the mid-fight cutout.
     if (this._nextTime < this.ctx.currentTime) this._nextTime = this.ctx.currentTime + 0.03;
-    while (this._nextTime < this.ctx.currentTime + 0.25) {   // wider lookahead rides out stalls
+    while (this._nextTime < this.ctx.currentTime + 0.4) {    // wide lookahead rides out heavy-frame stalls
       const i = this._step % len, t = this._nextTime;
       const ld = tr.lead[i], bs = tr.bass[i % tr.bass.length];
       if (ld != null) {

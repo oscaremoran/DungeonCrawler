@@ -285,12 +285,85 @@ const CARD_PACKS = [
     weights: { common: 7, rare: 6, epic: 2 } },
 ];
 
+/* Combat Arena ladder. Each rung is a scaled-up, renamed clone of a base foe —
+ * registered here as its own ENEMY_TYPES entry (sharing the base's sprites &
+ * skills) so it's a first-class monster that gets a Bestiary card. Arena cards
+ * are EARNED by defeating the foe in the pit (flagged `arena`, so card packs
+ * never roll them — see rollCards). ARENA_FOES is the ladder order; clearing
+ * rung i unlocks i+1 (see game.js openArena / battle.js endBattle). */
+const ARENA_VARIANTS = [
+  { id: "pit_goblin",   base: "goblin",           name: "Pit Goblin",    scale: 1.6, rarity: "common",
+    lore: "A goblin fattened on pit-blood and bad temper. Bigger, meaner, and twice as loud." },
+  { id: "dire_wolf",    base: "wolf",             name: "Dire Wolf",     scale: 1.9, rarity: "rare",
+    lore: "A monstrous wolf bred for the sands. It has never lost — and never eaten its fill." },
+  { id: "sellsword",    base: "mercenary",        name: "Sellsword",     scale: 2.1, rarity: "rare",
+    lore: "A pit veteran who fights for the roar of the crowd as much as the purse." },
+  { id: "bone_champion", base: "skeleton_warrior", name: "Bone Champion", scale: 2.4, rarity: "epic",
+    lore: "An undead gladiator, victor of a hundred bouts it cannot remember winning." },
+  { id: "bone_marksman", base: "skeleton_archer",  name: "Bone Marksman", scale: 2.7, rarity: "epic",
+    lore: "Every arrow finds a heart. The pit keeps it well-supplied with both." },
+  { id: "lich_acolyte", base: "skeleton_mage",    name: "Lich Acolyte",  scale: 3.0, rarity: "epic",
+    lore: "The Arena Master's champion — a death-mage who treats each bout as fresh research." },
+];
+for (const v of ARENA_VARIANTS) {
+  const b = ENEMY_TYPES[v.base];
+  ENEMY_TYPES[v.id] = {
+    ...b, name: v.name, boss: false,
+    hp:  Math.round(b.hp  * v.scale), atk:  Math.round(b.atk  * v.scale),
+    def: Math.round(b.def * v.scale), exp:  Math.round(b.exp  * v.scale),
+    gold: Math.round(b.gold * v.scale),
+    intro: v.name + " strides into the pit, eyes on you!",
+  };
+  CARD_INFO[v.id] = { rarity: v.rarity, lore: v.lore, arena: true };
+  CARD_MONSTERS.push(v.id);
+}
+const ARENA_FOES = ARENA_VARIANTS.map(v => v.id);   // ladder order, by type id
+
 /* the game's title — change this string to rename the game */
 const GAME_TITLE = "Game";
 const GAME_SUBTITLE = "";
 const AREA_NAME = "Greenwood Forest";
 
-const MAIN_MENU = ["Skills", "Equip", "Status", "Bestiary", "Quests", "Save"];
+const MAIN_MENU = ["Skills", "Equip", "Status", "Bestiary", "Achievements", "Quests", "Save"];
+
+/* Achievements — earned once and kept forever (a global localStorage trophy
+ * case, independent of any save slot). `test(g)` is run against live game state
+ * each tick; the first time it returns true the achievement unlocks with a toast.
+ * `icon` is the badge shown when earned; locked rows show a padlock instead. */
+const ACHIEVEMENTS = [
+  { id: "first_blood",  name: "First Blood",     icon: "sword",  desc: "Win your first battle.",
+    test: g => (g.stats.kills || 0) >= 1 },
+  { id: "slayer",       name: "Slayer",          icon: "dagger", desc: "Defeat 25 foes.",
+    test: g => (g.stats.kills || 0) >= 25 },
+  { id: "exterminator", name: "Exterminator",    icon: "skull",  desc: "Defeat 75 foes.",
+    test: g => (g.stats.kills || 0) >= 75 },
+  { id: "merc_work",    name: "Hired Steel",     icon: "shield", desc: "Beat the mercenaries at the inn.",
+    test: g => !!g.mercDefeated },
+  { id: "giant_slayer", name: "Giant Slayer",    icon: "axe",    desc: "Fell the Warden of Greenwood.",
+    test: g => !!(g.stats.byType && g.stats.byType.troll) },
+  { id: "bone_breaker", name: "Bone Breaker",    icon: "bone",   desc: "Destroy one of the risen dead.",
+    test: g => !!(g.stats.byType && (g.stats.byType.skeleton_warrior || g.stats.byType.skeleton_archer || g.stats.byType.skeleton_mage)) },
+  { id: "veteran",      name: "Veteran",         icon: "star",   desc: "Reach level 10.",
+    test: g => g.player.lv >= 10 },
+  { id: "not_alone",    name: "Not Alone",       icon: "allies", desc: "Recruit a companion.",
+    test: g => g.player.party.some(m => m.id === "ally") },
+  { id: "spellsword",   name: "Spellsword",      icon: "spark",  desc: "Equip your first skill.",
+    test: g => (g.player.skills || []).length >= 1 },
+  { id: "geared_up",    name: "Geared Up",       icon: "armor",  desc: "Wear a weapon and armor at once.",
+    test: g => !!(g.player.equip.weapon && g.player.equip.armor) },
+  { id: "treasure",     name: "Treasure Hunter", icon: "chest",  desc: "Open a treasure chest.",
+    test: g => (g.stats.chests || 0) >= 1 },
+  { id: "moneybags",    name: "Moneybags",       icon: "coin",   desc: "Amass 500 gold.",
+    test: g => g.player.gold >= 500 },
+  { id: "collector",    name: "Collector",       icon: "card",   desc: "Obtain your first monster card.",
+    test: g => Object.keys(g.player.cards || {}).length >= 1 },
+  { id: "loremaster",   name: "Loremaster",      icon: "book",   desc: "Discover every monster card.",
+    test: g => CARD_MONSTERS.every(t => (g.player.cards || {})[t]) },
+  { id: "road_koro",    name: "Road to Koro",    icon: "house",  desc: "Reach the town of Koro.",
+    test: g => !!(g.stats.visited && g.stats.visited.koro) },
+  { id: "city_bone",    name: "City of Bone",    icon: "castle", desc: "Set foot in Xal'Korr.",
+    test: g => !!(g.stats.visited && g.stats.visited.xalkorr) },
+];
 
 /* quest log entries — added/completed as the story progresses (see game.js). */
 const QUESTS = {
